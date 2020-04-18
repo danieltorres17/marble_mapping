@@ -1,5 +1,11 @@
+/**
+* marble_mapping_nodelet: A nodelet version of A. Hornung's octomap server
+* @author Marcus Liebhardt
+* License: BSD
+*/
+
 /*
- * Copyright (c) 2012, D. Kuhner, P. Ruchti, University of Freiburg
+ * Copyright (c) 2012, Marcus Liebhardt, Yujin Robot
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -10,7 +16,7 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the University of Freiburg nor the names of its
+ *     * Neither the name of Yujin Robot nor the names of its
  *       contributors may be used to endorse or promote products derived from
  *       this software without specific prior written permission.
  *
@@ -27,33 +33,37 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+
 #include <ros/ros.h>
-#include <octomap_server/TrackingOctomapServer.h>
+#include <MarbleMapping.h>
+#include <pluginlib/class_list_macros.h>
+#include <nodelet/nodelet.h>
 
-#define USAGE "\nUSAGE: octomap_tracking_server <map.bt>\n" \
-              "  map.bt: octomap 3D map file to read\n"
 
-using namespace octomap_server;
+namespace marble_mapping
+{
 
-int main(int argc, char** argv){
-  ros::init(argc, argv, "octomap_tracking_server");
-  std::string mapFilename("");
+class MarbleMappingNodelet : public nodelet::Nodelet
+{
+public:
+  virtual void onInit()
+  {
+    NODELET_DEBUG("Initializing octomap server nodelet ...");
+    ros::NodeHandle& nh = this->getNodeHandle();
+    ros::NodeHandle& private_nh = this->getPrivateNodeHandle();
+    server_.reset(new MarbleMapping(private_nh, nh));
 
-  if (argc > 2 || (argc == 2 && std::string(argv[1]) == "-h")){
-	  ROS_ERROR("%s", USAGE);
-	  exit(-1);
+    std::string mapFilename("");
+    if (private_nh.getParam("map_file", mapFilename)) {
+      if (!server_->openFile(mapFilename)){
+        NODELET_WARN("Could not open file %s", mapFilename.c_str());
+      }
+    }
   }
+private:
+  boost::shared_ptr<MarbleMapping> server_;
+};
 
-  if (argc == 2)
-	  mapFilename = std::string(argv[1]);
+} // namespace
 
-  try{
-	  TrackingOctomapServer ms(mapFilename);
-	  ros::spin();
-  }catch(std::runtime_error& e){
-	  ROS_ERROR("octomap_server exception: %s", e.what());
-	  return -1;
-  }
-
-  return 0;
-}
+PLUGINLIB_EXPORT_CLASS(marble_mapping::MarbleMappingNodelet, nodelet::Nodelet)

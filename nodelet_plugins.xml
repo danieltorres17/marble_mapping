@@ -1,0 +1,8 @@
+<library path="lib/libmarble_mapping_nodelet">
+  <class name="marble_mapping/MarbleMappingNodelet" type="marble_mapping::MarbleMappingNodelet" base_class_type="nodelet::Nodelet">
+    <description>
+      Nodelet for running the Octomap server
+    </description>
+  </class>
+</library>
+

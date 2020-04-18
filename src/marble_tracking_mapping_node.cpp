@@ -27,33 +27,33 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef OCTOMAP_SERVER_TRACKINGOCTOMAPSERVER_H_
-#define OCTOMAP_SERVER_TRACKINGOCTOMAPSERVER_H_
+#include <ros/ros.h>
+#include <TrackingMarbleMapping.h>
 
-#include "octomap_server/OctomapServer.h"
+#define USAGE "\nUSAGE: marble_tracking_mapping <map.bt>\n" \
+              "  map.bt: octomap 3D map file to read\n"
 
-namespace octomap_server {
+using namespace marble_mapping;
 
-class TrackingOctomapServer: public OctomapServer {
-public:
-  TrackingOctomapServer(const std::string& filename = "");
-  virtual ~TrackingOctomapServer();
+int main(int argc, char** argv){
+  ros::init(argc, argv, "marble_tracking_mapping");
+  std::string mapFilename("");
 
-  void trackCallback(sensor_msgs::PointCloud2Ptr cloud);
-  void insertScan(const tf::Point& sensorOrigin, const PCLPointCloud& ground, const PCLPointCloud& nonground);
+  if (argc > 2 || (argc == 2 && std::string(argv[1]) == "-h")){
+	  ROS_ERROR("%s", USAGE);
+	  exit(-1);
+  }
 
-protected:
-  void trackChanges();
+  if (argc == 2)
+	  mapFilename = std::string(argv[1]);
 
-  bool listen_changes;
-  bool track_changes;
-  int min_change_pub;
-  std::string change_id_frame;
-  ros::Publisher pubFreeChangeSet;
-  ros::Publisher pubChangeSet;
-  ros::Subscriber subChangeSet;
-  ros::Subscriber subFreeChanges;
-};
+  try{
+	  TrackingMarbleMapping ms(mapFilename);
+	  ros::spin();
+  }catch(std::runtime_error& e){
+	  ROS_ERROR("marble_mapping exception: %s", e.what());
+	  return -1;
+  }
 
-} /* namespace octomap */
-#endif /* TRACKINGOCTOMAPSERVER_H_ */
+  return 0;
+}

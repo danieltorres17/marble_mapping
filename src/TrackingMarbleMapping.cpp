@@ -27,15 +27,15 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <octomap_server/TrackingOctomapServer.h>
+#include <TrackingMarbleMapping.h>
 #include <string>
 
 using namespace octomap;
 
-namespace octomap_server {
+namespace marble_mapping {
 
-TrackingOctomapServer::TrackingOctomapServer(const std::string& filename) :
-	    OctomapServer()
+TrackingMarbleMapping::TrackingMarbleMapping(const std::string& filename) :
+	    MarbleMapping()
 {
   //read tree if necessary
   if (filename != "") {
@@ -79,22 +79,22 @@ TrackingOctomapServer::TrackingOctomapServer(const std::string& filename) :
   if (listen_changes) {
     ROS_INFO("starting client");
     subChangeSet = private_nh.subscribe(changeSetTopic, 1,
-                                        &TrackingOctomapServer::trackCallback, this);
+                                        &TrackingMarbleMapping::trackCallback, this);
   }
 }
 
-TrackingOctomapServer::~TrackingOctomapServer() {
+TrackingMarbleMapping::~TrackingMarbleMapping() {
 }
 
-void TrackingOctomapServer::insertScan(const tf::Point & sensorOrigin, const PCLPointCloud & ground, const PCLPointCloud & nonground) {
-  OctomapServer::insertScan(sensorOrigin, ground, nonground);
+void TrackingMarbleMapping::insertScan(const tf::Point & sensorOrigin, const PCLPointCloud & ground, const PCLPointCloud & nonground) {
+  MarbleMapping::insertScan(sensorOrigin, ground, nonground);
 
   if (track_changes) {
     trackChanges();
   }
 }
 
-void TrackingOctomapServer::trackChanges() {
+void TrackingMarbleMapping::trackChanges() {
   KeyBoolMap::const_iterator startPnt = m_octree->changedKeysBegin();
   KeyBoolMap::const_iterator endPnt = m_octree->changedKeysEnd();
 
@@ -138,7 +138,7 @@ void TrackingOctomapServer::trackChanges() {
   }
 }
 
-void TrackingOctomapServer::trackCallback(sensor_msgs::PointCloud2Ptr cloud) {
+void TrackingMarbleMapping::trackCallback(sensor_msgs::PointCloud2Ptr cloud) {
   pcl::PointCloud<pcl::PointXYZI> cells;
   pcl::fromROSMsg(*cloud, cells);
   ROS_DEBUG("[client] size of newly occupied cloud: %i", (int)cells.points.size());

@@ -30,6 +30,17 @@ include_directories(
 
 generate_dynamic_reconfigure_options(cfg/MarbleMapping.cfg)
 
+add_message_files(
+  FILES
+  OctomapArray.msg
+  OctomapNeighbors.msg
+)
+
+generate_messages(
+  DEPENDENCIES
+  octomap_msgs
+)
+
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES ${PROJECT_NAME}
@@ -42,15 +53,12 @@ set(LINK_LIBS
   ${catkin_LIBRARIES}
 )
 
-add_library(${PROJECT_NAME} src/MarbleMapping.cpp src/TrackingMarbleMapping.cpp)
+add_library(${PROJECT_NAME} src/MarbleMapping.cpp)
 target_link_libraries(${PROJECT_NAME} ${LINK_LIBS})
 add_dependencies(${PROJECT_NAME} ${PROJECT_NAME}_gencfg)
 
 add_executable(marble_mapping_node src/marble_mapping_node.cpp)
 target_link_libraries(marble_mapping_node ${PROJECT_NAME} ${LINK_LIBS})
-
-add_executable(marble_tracking_mapping_node src/marble_tracking_mapping_node.cpp)
-target_link_libraries(marble_tracking_mapping_node ${PROJECT_NAME} ${LINK_LIBS})
 
 # Nodelet
 add_library(marble_mapping_nodelet src/marble_mapping_nodelet.cpp)
@@ -59,7 +67,6 @@ target_link_libraries(marble_mapping_nodelet ${PROJECT_NAME} ${LINK_LIBS})
 # install targets:
 install(TARGETS ${PROJECT_NAME}
   marble_mapping_node
-  marble_tracking_mapping_node
   marble_mapping_nodelet
   ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}

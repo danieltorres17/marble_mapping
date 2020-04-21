@@ -64,7 +64,11 @@
 
 #include <octomap_ros/conversions.h>
 #include <octomap/octomap.h>
+#include <octomap/OcTreeStamped.h>
 #include <octomap/OcTreeKey.h>
+
+#include "marble_mapping/OctomapArray.h"
+#include "marble_mapping/OctomapNeighbors.h"
 
 namespace marble_mapping {
 class MarbleMapping {
@@ -111,6 +115,8 @@ protected:
   void reconfigureCallback(marble_mapping::MarbleMappingConfig& config, uint32_t level);
   void publishBinaryOctoMap(const ros::Time& rostime = ros::Time::now()) const;
   void publishFullOctoMap(const ros::Time& rostime = ros::Time::now()) const;
+  void publishMergedBinaryOctoMap(const ros::Time& rostime = ros::Time::now()) const;
+  void publishMergedFullOctoMap(const ros::Time& rostime = ros::Time::now()) const;
   virtual void publishAll(const ros::Time& rostime = ros::Time::now());
 
   /**
@@ -122,6 +128,9 @@ protected:
   * @param nonground all other endpoints (clear up to occupied endpoint)
   */
   virtual void insertScan(const tf::Point& sensorOrigin, const PCLPointCloud& ground, const PCLPointCloud& nonground);
+
+  // Check the changes since last run to publish for sharing to other agents
+  void updateDiff(const ros::TimerEvent& event);
 
   /// label the input cloud "pc" into ground and nonground. Should be in the robot's fixed frame (not world!)
   void filterGroundPlane(const PCLPointCloud& pc, PCLPointCloud& ground, PCLPointCloud& nonground) const;
@@ -188,18 +197,24 @@ protected:
   static std_msgs::ColorRGBA heightMapColor(double h);
   ros::NodeHandle m_nh;
   ros::NodeHandle m_nh_private;
-  ros::Publisher  m_markerPub, m_binaryMapPub, m_fullMapPub, m_pointCloudPub, m_collisionObjectPub, m_mapPub, m_cmapPub, m_fmapPub, m_fmarkerPub;
+  ros::Publisher  m_markerPub, m_binaryMapPub, m_fullMapPub, m_mergedBinaryMapPub, m_mergedFullMapPub, m_diffMapPub, m_diffsMapPub, m_pointCloudPub, m_collisionObjectPub, m_mapPub, m_cmapPub, m_fmapPub, m_fmarkerPub;
   message_filters::Subscriber<sensor_msgs::PointCloud2>* m_pointCloudSub;
   tf::MessageFilter<sensor_msgs::PointCloud2>* m_tfPointCloudSub;
   ros::ServiceServer m_octomapBinaryService, m_octomapFullService, m_clearBBXService, m_resetService;
+  ros::Timer diff_timer;
   tf::TransformListener m_tfListener;
   boost::recursive_mutex m_config_mutex;
   dynamic_reconfigure::Server<MarbleMappingConfig> m_reconfigureServer;
 
   OcTreeT* m_octree;
+  OcTreeT* m_diff_tree;
+  octomap::OcTreeStamped* m_merged_tree;
   octomap::KeyRay m_keyRay;  // temp storage for ray casting
   octomap::OcTreeKey m_updateBBXMin;
   octomap::OcTreeKey m_updateBBXMax;
+
+  marble_mapping::OctomapArray mapdiffs;
+  marble_mapping::OctomapNeighbors neighbors;
 
   double m_maxRange;
   std::string m_worldFrameId; // the map frame
@@ -215,6 +230,11 @@ protected:
   double m_res;
   unsigned m_treeDepth;
   unsigned m_maxTreeDepth;
+
+  // Diff parameters
+  int diff_threshold;
+  double diff_duration;
+  unsigned num_diffs;
 
   double m_pointcloudMinX;
   double m_pointcloudMaxX;

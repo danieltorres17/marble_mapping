@@ -106,6 +106,10 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_nh_private.param("sensor_model/max", thresMax, 0.97);
   m_nh_private.param("compress_map", m_compressMap, m_compressMap);
   m_nh_private.param("incremental_2D_projection", m_incrementalUpdate, m_incrementalUpdate);
+  // Threshold for when to add map diffs
+  m_nh_private.param("diff_threshold", diff_threshold, 1000);
+  // How many seconds to check/publish diffs
+  m_nh_private.param("diff_duration", diff_duration, 10.0);
 
   if (m_filterGroundPlane && (m_pointcloudMinZ > 0.0 || m_pointcloudMaxZ < 0.0)){
     ROS_WARN_STREAM("You enabled ground filtering but incoming pointclouds will be pre-filtered in ["
@@ -119,9 +123,14 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_octree->setProbMiss(probMiss);
   m_octree->setClampingThresMin(thresMin);
   m_octree->setClampingThresMax(thresMax);
+  m_octree->enableChangeDetection(true);
   m_treeDepth = m_octree->getTreeDepth();
   m_maxTreeDepth = m_treeDepth;
   m_gridmap.info.resolution = m_res;
+
+  m_merged_tree = new OcTreeStamped(m_res);
+  m_diff_tree = new OcTreeT(m_res);
+  num_diffs = 0;
 
   double r, g, b, a;
   m_nh_private.param("color/r", r, 0.0);
@@ -153,6 +162,10 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_markerPub = m_nh.advertise<visualization_msgs::MarkerArray>("occupied_cells_vis_array", 1, m_latchedTopics);
   m_binaryMapPub = m_nh.advertise<Octomap>("octomap_binary", 1, m_latchedTopics);
   m_fullMapPub = m_nh.advertise<Octomap>("octomap_full", 1, m_latchedTopics);
+  m_mergedBinaryMapPub = m_nh.advertise<Octomap>("merged_map", 1, m_latchedTopics);
+  m_mergedFullMapPub = m_nh.advertise<Octomap>("merged_map_full", 1, m_latchedTopics);
+  m_diffMapPub = m_nh.advertise<Octomap>("map_diff", 1, m_latchedTopics);
+  m_diffsMapPub = m_nh.advertise<marble_mapping::OctomapArray>("map_diffs", 1, m_latchedTopics);
   m_pointCloudPub = m_nh.advertise<sensor_msgs::PointCloud2>("octomap_point_cloud_centers", 1, m_latchedTopics);
   m_mapPub = m_nh.advertise<nav_msgs::OccupancyGrid>("projected_map", 5, m_latchedTopics);
   m_fmarkerPub = m_nh.advertise<visualization_msgs::MarkerArray>("free_cells_vis_array", 1, m_latchedTopics);
@@ -165,6 +178,9 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_octomapFullService = m_nh.advertiseService("octomap_full", &MarbleMapping::octomapFullSrv, this);
   m_clearBBXService = m_nh_private.advertiseService("clear_bbx", &MarbleMapping::clearBBXSrv, this);
   m_resetService = m_nh_private.advertiseService("reset", &MarbleMapping::resetSrv, this);
+
+  // Timer for updating the local map diff that will be broadcast
+  diff_timer = m_nh.createTimer(ros::Duration(diff_duration), &MarbleMapping::updateDiff, this);
 
   dynamic_reconfigure::Server<MarbleMappingConfig>::CallbackType f;
   f = boost::bind(&MarbleMapping::reconfigureCallback, this, _1, _2);
@@ -182,12 +198,20 @@ MarbleMapping::~MarbleMapping(){
     m_pointCloudSub = NULL;
   }
 
-
   if (m_octree){
     delete m_octree;
     m_octree = NULL;
   }
 
+  if (m_merged_tree){
+    delete m_merged_tree;
+    m_merged_tree = NULL;
+  }
+
+  if (m_diff_tree){
+    delete m_diff_tree;
+    m_diff_tree = NULL;
+  }
 }
 
 bool MarbleMapping::openFile(const std::string& filename){
@@ -331,6 +355,11 @@ void MarbleMapping::insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr
 
   insertScan(sensorToWorldTf.getOrigin(), pc_ground, pc_nonground);
 
+  if (m_compressMap) {
+    m_octree->prune();
+    m_merged_tree->prune();
+  }
+
   double total_elapsed = (ros::WallTime::now() - startTime).toSec();
   ROS_DEBUG("Pointcloud insertion in MarbleMapping done (%zu+%zu pts (ground/nonground), %f sec)", pc_ground.size(), pc_nonground.size(), total_elapsed);
 
@@ -411,12 +440,16 @@ void MarbleMapping::insertScan(const tf::Point& sensorOriginTf, const PCLPointCl
   for(KeySet::iterator it = free_cells.begin(), end=free_cells.end(); it!= end; ++it){
     if (occupied_cells.find(*it) == occupied_cells.end()){
       m_octree->updateNode(*it, false);
+      OcTreeNodeStamped *newNode = m_merged_tree->updateNode(*it, false);
+      newNode->setTimestamp(1);
     }
   }
 
   // now mark all occupied cells:
   for (KeySet::iterator it = occupied_cells.begin(), end=occupied_cells.end(); it!= end; it++) {
     m_octree->updateNode(*it, true);
+    OcTreeNodeStamped *newNode = m_merged_tree->updateNode(*it, true);
+    newNode->setTimestamp(1);
   }
 
   // TODO: eval lazy+updateInner vs. proper insertion
@@ -442,13 +475,44 @@ void MarbleMapping::insertScan(const tf::Point& sensorOriginTf, const PCLPointCl
   maxPt = m_octree->keyToCoord(m_updateBBXMax);
   ROS_DEBUG_STREAM("Updated area bounding box: "<< minPt << " - "<<maxPt);
   ROS_DEBUG_STREAM("Bounding box keys (after): " << m_updateBBXMin[0] << " " <<m_updateBBXMin[1] << " " << m_updateBBXMin[2] << " / " <<m_updateBBXMax[0] << " "<<m_updateBBXMax[1] << " "<< m_updateBBXMax[2]);
-
-  if (m_compressMap)
-    m_octree->prune();
-
 }
 
+void MarbleMapping::updateDiff(const ros::TimerEvent& event) {
+  // Find all changed nodes since last update and create a new octomap
+  KeyBoolMap::const_iterator startPnt = m_octree->changedKeysBegin();
+  KeyBoolMap::const_iterator endPnt = m_octree->changedKeysEnd();
 
+  m_diff_tree->clear();
+
+  int num_nodes = 0;
+  for (KeyBoolMap::const_iterator iter = startPnt; iter != endPnt; ++iter) {
+    // Copy the value for each node
+    num_nodes++;
+    OcTreeNode* node = m_octree->search(iter->first);
+    m_diff_tree->setNodeValue(iter->first, node->getLogOdds());
+  }
+
+  // Only update the diff map if enough has changed
+  if (num_nodes > diff_threshold) {
+    num_diffs++;
+    m_diff_tree->prune();
+
+    // Create and publish message for this diff
+    octomap_msgs::Octomap msg;
+    octomap_msgs::binaryMapToMsg(*m_diff_tree, msg);
+    msg.header.frame_id = m_worldFrameId;
+    msg.header.stamp = ros::Time().now();
+    msg.header.seq = num_diffs - 1;
+    m_diffMapPub.publish(msg);
+
+    // Add the diff to the map diffs array
+    mapdiffs.octomaps.push_back(msg);
+    mapdiffs.num_octomaps = num_diffs;
+    m_diffsMapPub.publish(mapdiffs);
+
+    m_octree->resetChangeDetection();
+  }
+}
 
 void MarbleMapping::publishAll(const ros::Time& rostime){
   ros::WallTime startTime = ros::WallTime::now();
@@ -464,6 +528,8 @@ void MarbleMapping::publishAll(const ros::Time& rostime){
   bool publishPointCloud = (m_latchedTopics || m_pointCloudPub.getNumSubscribers() > 0);
   bool publishBinaryMap = (m_latchedTopics || m_binaryMapPub.getNumSubscribers() > 0);
   bool publishFullMap = (m_latchedTopics || m_fullMapPub.getNumSubscribers() > 0);
+  bool publishMergedBinaryMap = (m_latchedTopics || m_mergedBinaryMapPub.getNumSubscribers() > 0);
+  bool publishMergedFullMap = (m_latchedTopics || m_mergedFullMapPub.getNumSubscribers() > 0);
   m_publish2DMap = (m_latchedTopics || m_mapPub.getNumSubscribers() > 0);
 
   // init markers for free space:
@@ -644,6 +710,11 @@ void MarbleMapping::publishAll(const ros::Time& rostime){
   if (publishFullMap)
     publishFullOctoMap(rostime);
 
+  if (publishMergedBinaryMap)
+    publishMergedBinaryOctoMap(rostime);
+
+  if (publishMergedFullMap)
+    publishMergedFullOctoMap(rostime);
 
   double total_elapsed = (ros::WallTime::now() - startTime).toSec();
   ROS_DEBUG("Map publishing in MarbleMapping took %f sec", total_elapsed);
@@ -767,9 +838,33 @@ void MarbleMapping::publishFullOctoMap(const ros::Time& rostime) const{
     m_fullMapPub.publish(map);
   else
     ROS_ERROR("Error serializing OctoMap");
-
 }
 
+void MarbleMapping::publishMergedBinaryOctoMap(const ros::Time& rostime) const{
+
+  Octomap map;
+  map.header.frame_id = m_worldFrameId;
+  map.header.stamp = rostime;
+
+  if (octomap_msgs::binaryMapToMsg(*m_merged_tree, map)) {
+    map.id = "OcTree";
+    m_mergedBinaryMapPub.publish(map);
+  } else
+    ROS_ERROR("Error serializing OctoMap");
+}
+
+void MarbleMapping::publishMergedFullOctoMap(const ros::Time& rostime) const{
+
+  Octomap map;
+  map.header.frame_id = m_worldFrameId;
+  map.header.stamp = rostime;
+
+  if (octomap_msgs::fullMapToMsg(*m_merged_tree, map)) {
+    map.id = "OcTree";
+    m_mergedFullMapPub.publish(map);
+  } else
+    ROS_ERROR("Error serializing OctoMap");
+}
 
 void MarbleMapping::filterGroundPlane(const PCLPointCloud& pc, PCLPointCloud& ground, PCLPointCloud& nonground) const{
   ground.header = pc.header;

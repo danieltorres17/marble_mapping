@@ -66,7 +66,6 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_minSizeX(0.0), m_minSizeY(0.0),
   m_filterSpeckles(false), m_filterGroundPlane(false),
   m_groundFilterDistance(0.04), m_groundFilterAngle(0.15), m_groundFilterPlaneDistance(0.07),
-  m_compressMap(true),
   m_incrementalUpdate(false),
   m_initConfig(true)
 {
@@ -104,8 +103,10 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_nh_private.param("sensor_model/miss", probMiss, 0.4);
   m_nh_private.param("sensor_model/min", thresMin, 0.12);
   m_nh_private.param("sensor_model/max", thresMax, 0.97);
-  m_nh_private.param("compress_map", m_compressMap, m_compressMap);
   m_nh_private.param("incremental_2D_projection", m_incrementalUpdate, m_incrementalUpdate);
+  m_nh_private.param("publish_merged_binary", publishMergedBinaryMap, true);
+  m_nh_private.param("publish_merged_full", publishMergedFullMap, false);
+
   // Threshold for when to add map diffs
   m_nh_private.param("diff_threshold", diff_threshold, 1000);
   // How many seconds to check/publish diffs
@@ -131,6 +132,7 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_merged_tree = new OcTreeStamped(m_res);
   m_diff_tree = new OcTreeT(m_res);
   num_diffs = 0;
+  next_idx = 2;
 
   double r, g, b, a;
   m_nh_private.param("color/r", r, 0.0);
@@ -170,6 +172,7 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_mapPub = m_nh.advertise<nav_msgs::OccupancyGrid>("projected_map", 5, m_latchedTopics);
   m_fmarkerPub = m_nh.advertise<visualization_msgs::MarkerArray>("free_cells_vis_array", 1, m_latchedTopics);
 
+  m_neighborsSub = m_nh.subscribe("neighbor_maps", 100, &MarbleMapping::neighborMapsCallback, this);
   m_pointCloudSub = new message_filters::Subscriber<sensor_msgs::PointCloud2> (m_nh, "cloud_in", 5);
   m_tfPointCloudSub = new tf::MessageFilter<sensor_msgs::PointCloud2> (*m_pointCloudSub, m_tfListener, m_worldFrameId, 5);
   m_tfPointCloudSub->registerCallback(boost::bind(&MarbleMapping::insertCloudCallback, this, _1));
@@ -267,6 +270,19 @@ bool MarbleMapping::openFile(const std::string& filename){
 
 }
 
+void MarbleMapping::neighborMapsCallback(const marble_mapping::OctomapNeighborsConstPtr& msg) {
+  neighbors = *msg;
+  // Better to put this somewhere else, but the callback should be infrequent enough this is ok
+  mergeNeighbors();
+  m_merged_tree->prune();
+
+  if (publishMergedBinaryMap)
+    publishMergedBinaryOctoMap(ros::Time::now());
+
+  if (publishMergedFullMap)
+    publishMergedFullOctoMap(ros::Time::now());
+}
+
 void MarbleMapping::insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr& cloud){
   ros::WallTime startTime = ros::WallTime::now();
 
@@ -355,10 +371,8 @@ void MarbleMapping::insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr
 
   insertScan(sensorToWorldTf.getOrigin(), pc_ground, pc_nonground);
 
-  if (m_compressMap) {
-    m_octree->prune();
-    m_merged_tree->prune();
-  }
+  m_octree->prune();
+  m_merged_tree->prune();
 
   double total_elapsed = (ros::WallTime::now() - startTime).toSec();
   ROS_DEBUG("Pointcloud insertion in MarbleMapping done (%zu+%zu pts (ground/nonground), %f sec)", pc_ground.size(), pc_nonground.size(), total_elapsed);
@@ -514,6 +528,76 @@ void MarbleMapping::updateDiff(const ros::TimerEvent& event) {
   }
 }
 
+void MarbleMapping::mergeNeighbors() {
+  // Merge neighbor maps with local map
+  octomap::OcTree* ntree;
+  bool overwrite_node;
+  unsigned ts;
+
+  for (int i=0; i< neighbors.num_neighbors; i++) {
+    std::string nid = neighbors.neighbors[i].owner;
+    // Check each diff for new ones to merge
+    for (int j=0; j < neighbors.neighbors[i].num_octomaps; j++) {
+      uint32_t cur_seq = neighbors.neighbors[i].octomaps[j].header.seq;
+      bool exists = std::count(seqs[nid.data()].cbegin(), seqs[nid.data()].cend(), cur_seq);
+
+      // Only merge if we haven't already merged this sequence
+      if (!exists) {
+        // Add to our list of sequences, and get a unique timestamp for this neighbor
+        seqs[nid.data()].push_back(cur_seq);
+        if (idx[nid.data()])
+          ts = idx[nid.data()];
+        else {
+          idx[nid.data()] = next_idx;
+          ts = next_idx;
+          next_idx++;
+        }
+
+        // If we missed an earlier sequence and get it later, don't replace, but potentially merge
+        if (cur_seq >= *std::max_element(seqs[nid.data()].cbegin(), seqs[nid.data()].cend()))
+          overwrite_node = true;
+        else
+          overwrite_node = false;
+
+        if (neighbors.neighbors[i].octomaps[j].binary)
+          ntree = (octomap::OcTree*)octomap_msgs::binaryMsgToMap(neighbors.neighbors[i].octomaps[j]);
+        else
+          ntree = (octomap::OcTree*)octomap_msgs::fullMsgToMap(neighbors.neighbors[i].octomaps[j]);
+
+        // Iterate through the diff tree and merge
+        ntree->expand();
+        for (OcTree::leaf_iterator it = ntree->begin_leafs(); it != ntree->end_leafs(); ++it) {
+          OcTreeKey nodeKey = it.getKey();
+          OcTreeNodeStamped *nodeM = m_merged_tree->search(nodeKey);
+          if (nodeM != NULL) {
+            if (overwrite_node && (nodeM->getTimestamp() == ts)) {
+              // If the diff is newer, and the merge node came from this neighbor
+              // replace the value and maintain the timestamp id
+              m_merged_tree->setNodeValue(nodeKey, it->getLogOdds());
+              nodeM->setTimestamp(ts);
+            } else if ((nodeM->getTimestamp() == 0) || (nodeM->getTimestamp() != 1)) {
+              // If there's already a node in the merged map, but it's from another neighbor,
+              // or it's been previously merged, merge the value, and set timestamp to merged
+              // Update based on occupancy seems to work better than getLogOdds
+              if (it->getOccupancy() > 0.5)
+                m_merged_tree->updateNode(nodeKey, true);
+              else
+                m_merged_tree->updateNode(nodeKey, false);
+              nodeM->setTimestamp(0);
+            }
+          } else {
+            // If the node doesn't exist in the merged map, add it with the value
+            OcTreeNodeStamped *newNode = m_merged_tree->setNodeValue(nodeKey, it->getLogOdds());
+            newNode->setTimestamp(ts);
+          }
+        }
+
+        delete ntree;
+      }
+    }
+  }
+}
+
 void MarbleMapping::publishAll(const ros::Time& rostime){
   ros::WallTime startTime = ros::WallTime::now();
   size_t octomapSize = m_octree->size();
@@ -528,8 +612,6 @@ void MarbleMapping::publishAll(const ros::Time& rostime){
   bool publishPointCloud = (m_latchedTopics || m_pointCloudPub.getNumSubscribers() > 0);
   bool publishBinaryMap = (m_latchedTopics || m_binaryMapPub.getNumSubscribers() > 0);
   bool publishFullMap = (m_latchedTopics || m_fullMapPub.getNumSubscribers() > 0);
-  bool publishMergedBinaryMap = (m_latchedTopics || m_mergedBinaryMapPub.getNumSubscribers() > 0);
-  bool publishMergedFullMap = (m_latchedTopics || m_mergedFullMapPub.getNumSubscribers() > 0);
   m_publish2DMap = (m_latchedTopics || m_mapPub.getNumSubscribers() > 0);
 
   // init markers for free space:
@@ -1182,7 +1264,6 @@ void MarbleMapping::reconfigureCallback(marble_mapping::MarbleMappingConfig& con
     m_occupancyMaxZ             = config.occupancy_max_z;
     m_filterSpeckles            = config.filter_speckles;
     m_filterGroundPlane         = config.filter_ground;
-    m_compressMap               = config.compress_map;
     m_incrementalUpdate         = config.incremental_2D_projection;
 
     // Parameters with a namespace require an special treatment at the beginning, as dynamic reconfigure

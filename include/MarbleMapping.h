@@ -87,6 +87,7 @@ public:
   bool clearBBXSrv(BBXSrv::Request& req, BBXSrv::Response& resp);
   bool resetSrv(std_srvs::Empty::Request& req, std_srvs::Empty::Response& resp);
 
+  virtual void neighborMapsCallback(const marble_mapping::OctomapNeighborsConstPtr& msg);
   virtual void insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr& cloud);
   virtual bool openFile(const std::string& filename);
 
@@ -131,6 +132,9 @@ protected:
 
   // Check the changes since last run to publish for sharing to other agents
   void updateDiff(const ros::TimerEvent& event);
+
+  // Merge all neighbor maps
+  void mergeNeighbors();
 
   /// label the input cloud "pc" into ground and nonground. Should be in the robot's fixed frame (not world!)
   void filterGroundPlane(const PCLPointCloud& pc, PCLPointCloud& ground, PCLPointCloud& nonground) const;
@@ -198,6 +202,7 @@ protected:
   ros::NodeHandle m_nh;
   ros::NodeHandle m_nh_private;
   ros::Publisher  m_markerPub, m_binaryMapPub, m_fullMapPub, m_mergedBinaryMapPub, m_mergedFullMapPub, m_diffMapPub, m_diffsMapPub, m_pointCloudPub, m_collisionObjectPub, m_mapPub, m_cmapPub, m_fmapPub, m_fmarkerPub;
+  ros::Subscriber m_neighborsSub;
   message_filters::Subscriber<sensor_msgs::PointCloud2>* m_pointCloudSub;
   tf::MessageFilter<sensor_msgs::PointCloud2>* m_tfPointCloudSub;
   ros::ServiceServer m_octomapBinaryService, m_octomapFullService, m_clearBBXService, m_resetService;
@@ -231,10 +236,16 @@ protected:
   unsigned m_treeDepth;
   unsigned m_maxTreeDepth;
 
+  bool publishMergedBinaryMap;
+  bool publishMergedFullMap;
+
   // Diff parameters
   int diff_threshold;
   double diff_duration;
   unsigned num_diffs;
+  unsigned next_idx;
+  std::map<std::string, std::vector<int>> seqs;
+  std::map<std::string, int> idx;
 
   double m_pointcloudMinX;
   double m_pointcloudMaxX;
@@ -252,8 +263,6 @@ protected:
   double m_groundFilterDistance;
   double m_groundFilterAngle;
   double m_groundFilterPlaneDistance;
-
-  bool m_compressMap;
 
   bool m_initConfig;
 

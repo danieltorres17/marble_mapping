@@ -1,23 +1,37 @@
-<!-- 
-  Example launch file for marble_mapping mapping: 
-  Listens to incoming PointCloud2 data and incrementally builds an octomap. 
-  The data is sent out in different representations. 
-
-  Copy this file into your workspace and adjust as needed, see
-  www.ros.org/wiki/marble_mapping for details  
--->
+<?xml version="1.0" encoding="UTF-8"?>
 <launch>
-	<node pkg="marble_mapping" type="marble_mapping_node" name="marble_mapping">
-		<param name="resolution" value="0.05" />
-		
-		<!-- fixed map frame (set to 'map' if SLAM or localization running!) -->
-		<param name="frame_id" type="string" value="odom_combined" />
-		
-		<!-- maximum range to integrate (speedup!) -->
-		<param name="sensor_model/max_range" value="5.0" />
-		
-		<!-- data source to integrate (PointCloud2) -->
-		<remap from="cloud_in" to="/narrow_stereo/points_filtered2" />
-	
-	</node>
+  <arg name="resolution" default="0.2" />
+  <!-- Fixed map frame (set to 'map' if SLAM or localization running!) -->
+  <arg name="frame_id" default="world" />
+  <!-- Maximum range to integrate (speedup!) -->
+  <arg name="max_range" default="7.0" />
+  <!-- Whether to publish merged maps -->
+  <arg name="publish_merged_binary" default="true" />
+  <arg name="publish_merged_full" default="false" />
+
+  <node pkg="marble_mapping" type="marble_mapping_node" name="marble_mapping" output="screen">
+    <param name="resolution" value="$(arg resolution)" />
+    <param name="frame_id" type="string" value="$(arg frame_id)" />
+    <param name="sensor_model/max_range" value="$(arg max_range)" />
+
+    <param name="publish_merged_binary" value="$(arg publish_merged_binary)" />
+    <param name="publish_merged_full" value="$(arg publish_merged_full)" />
+
+    <!-- Number of new nodes required to create a new diff -->
+    <param name="diff_threshold" value="1000" />
+    <!-- How many seconds to publish and reset diff map -->
+    <param name="diff_duration" value="10.0" />
+
+    <!-- Data source to integrate (PointCloud2) -->
+    <remap from="cloud_in" to="points" />
+
+    <!-- The robot's base frame in which the ground plane detection is performed -->
+    <!-- <remap from="base_frame_id" to="/X1/base_link" /> -->
+
+    <!-- Remove ground plane occupancy from occupancy grid (boolean)-->
+    <!-- <param name="filter_ground" value="false" /> -->
+
+    <!-- Publish free cells vis_array (boolean)-->
+    <param name="publish_free_space" value="true" />
+  </node>
 </launch>

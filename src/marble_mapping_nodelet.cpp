@@ -5,7 +5,8 @@
 */
 
 /*
- * Copyright (c) 2012, Marcus Liebhardt, Yujin Robot
+ * Original work Copyright (c) 2012, Marcus Liebhardt, Yujin Robot
+ * Modified work Copyright 2020 Dan Riley
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without

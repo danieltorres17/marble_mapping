@@ -1,13 +1,14 @@
 /**
-* marble_mapping: A Tool to serve 3D OctoMaps in ROS (binary and as visualization)
-* (inspired by the ROS map_saver)
+* marble_mapping: A Tool to serve and merge octomaps
+* (inspired by octomap_server)
 * @author A. Hornung, University of Freiburg, Copyright (C) 2009 - 2012.
-* @see http://octomap.sourceforge.net/
+* @author D. Riley, Copyright (C) 2020.
 * License: BSD
 */
 
 /*
- * Copyright (c) 2009-2012, A. Hornung, University of Freiburg
+ * Original work Copyright (c) 2009-2012, A. Hornung, University of Freiburg
+ * Modified work Copyright 2020 Dan Riley
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without

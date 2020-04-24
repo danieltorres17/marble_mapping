@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2010-2013, A. Hornung, University of Freiburg
+ * Original work Copyright (c) 2010-2013, A. Hornung, University of Freiburg
+ * Modified work Copyright 2020 Dan Riley
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -233,6 +234,7 @@ protected:
   bool m_publishFreeSpace;
 
   double m_res;
+  double m_mres;
   unsigned m_treeDepth;
   unsigned m_maxTreeDepth;
 

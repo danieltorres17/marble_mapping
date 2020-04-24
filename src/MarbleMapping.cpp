@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2010-2013, A. Hornung, University of Freiburg
+ * Original work Copyright (c) 2010-2013, A. Hornung, University of Freiburg
+ * Modified work Copyright 2020 Dan Riley
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -99,6 +100,7 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_nh_private.param("sensor_model/max_range", m_maxRange, m_maxRange);
 
   m_nh_private.param("resolution", m_res, m_res);
+  m_nh_private.param("merged_resolution", m_mres, 0.2);
   m_nh_private.param("sensor_model/hit", probHit, 0.7);
   m_nh_private.param("sensor_model/miss", probMiss, 0.4);
   m_nh_private.param("sensor_model/min", thresMin, 0.12);
@@ -129,8 +131,8 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_maxTreeDepth = m_treeDepth;
   m_gridmap.info.resolution = m_res;
 
-  m_merged_tree = new OcTreeStamped(m_res);
-  m_diff_tree = new OcTreeT(m_res);
+  m_merged_tree = new OcTreeStamped(m_mres);
+  m_diff_tree = new OcTreeT(m_mres);
   num_diffs = 0;
   next_idx = 2;
 
@@ -492,6 +494,7 @@ void MarbleMapping::insertScan(const tf::Point& sensorOriginTf, const PCLPointCl
 }
 
 void MarbleMapping::updateDiff(const ros::TimerEvent& event) {
+  // TODO Add a check to see if we're in comm with anyone, and if not, don't update the diff
   // Find all changed nodes since last update and create a new octomap
   KeyBoolMap::const_iterator startPnt = m_octree->changedKeysBegin();
   KeyBoolMap::const_iterator endPnt = m_octree->changedKeysEnd();

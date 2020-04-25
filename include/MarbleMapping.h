@@ -52,6 +52,7 @@
 #include <pcl/io/pcd_io.h>
 #include <pcl/filters/extract_indices.h>
 #include <pcl/filters/passthrough.h>
+#include <pcl/filters/voxel_grid.h>
 #include <pcl_conversions/pcl_conversions.h>
 
 
@@ -215,7 +216,6 @@ protected:
   OcTreeT* m_octree;
   OcTreeT* m_diff_tree;
   octomap::OcTreeStamped* m_merged_tree;
-  octomap::KeyRay m_keyRay;  // temp storage for ray casting
   octomap::OcTreeKey m_updateBBXMin;
   octomap::OcTreeKey m_updateBBXMax;
 
@@ -259,6 +259,7 @@ protected:
   double m_occupancyMaxZ;
   double m_minSizeX;
   double m_minSizeY;
+  double m_downsampleSize;
   bool m_filterSpeckles;
 
   bool m_filterGroundPlane;

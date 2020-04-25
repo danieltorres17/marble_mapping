@@ -8,6 +8,8 @@
   <arg name="frame_id" default="world" />
   <!-- Maximum range to integrate (speedup!) -->
   <arg name="max_range" default="7.0" />
+  <!-- Resolution to downsample point cloud using Voxel Grid Filter.  Set to 0 for none -->
+  <arg name="downsample_size" default="0.0" />
   <!-- Whether to publish merged maps -->
   <arg name="publish_merged_binary" default="true" />
   <arg name="publish_merged_full" default="false" />
@@ -17,6 +19,7 @@
     <param name="merged_resolution" value="$(arg merged_resolution)" />
     <param name="frame_id" type="string" value="$(arg frame_id)" />
     <param name="sensor_model/max_range" value="$(arg max_range)" />
+    <param name="downsample_size" value="$(arg downsample_size)" />
 
     <param name="publish_merged_binary" value="$(arg publish_merged_binary)" />
     <param name="publish_merged_full" value="$(arg publish_merged_full)" />

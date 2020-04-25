@@ -88,6 +88,7 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_nh_private.param("min_x_size", m_minSizeX,m_minSizeX);
   m_nh_private.param("min_y_size", m_minSizeY,m_minSizeY);
 
+  m_nh_private.param("downsample_size", m_downsampleSize, 0.0);
   m_nh_private.param("filter_speckles", m_filterSpeckles, m_filterSpeckles);
   m_nh_private.param("filter_ground", m_filterGroundPlane, m_filterGroundPlane);
   // distance of points from plane for RANSAC
@@ -126,12 +127,12 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_octree->setProbMiss(probMiss);
   m_octree->setClampingThresMin(thresMin);
   m_octree->setClampingThresMax(thresMax);
-  m_octree->enableChangeDetection(true);
   m_treeDepth = m_octree->getTreeDepth();
   m_maxTreeDepth = m_treeDepth;
   m_gridmap.info.resolution = m_res;
 
   m_merged_tree = new OcTreeStamped(m_mres);
+  m_merged_tree->enableChangeDetection(true);
   m_diff_tree = new OcTreeT(m_mres);
   num_diffs = 0;
   next_idx = 2;
@@ -295,6 +296,14 @@ void MarbleMapping::insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr
   PCLPointCloud pc; // input cloud for filtering and ground-detection
   pcl::fromROSMsg(*cloud, pc);
 
+  if (m_downsampleSize > 0.0) {
+    pcl::VoxelGrid<pcl::PointXYZ> voxel_filter;
+    voxel_filter.setInputCloud (pc.makeShared());
+    voxel_filter.setFilterFieldName("x");
+    voxel_filter.setLeafSize (m_downsampleSize, m_downsampleSize, m_downsampleSize);
+    voxel_filter.filter (pc);
+  }
+
   tf::StampedTransform sensorToWorldTf;
   try {
     m_tfListener.lookupTransform(m_worldFrameId, cloud->header.frame_id, cloud->header.stamp, sensorToWorldTf);
@@ -393,6 +402,8 @@ void MarbleMapping::insertScan(const tf::Point& sensorOriginTf, const PCLPointCl
 
   // instead of direct scan insertion, compute update to filter ground:
   KeySet free_cells, occupied_cells;
+  octomap::KeyRay m_keyRay;
+
   // insert ground points only as free:
   for (PCLPointCloud::const_iterator it = ground.begin(); it != ground.end(); ++it){
     point3d point(it->x, it->y, it->z);
@@ -456,7 +467,8 @@ void MarbleMapping::insertScan(const tf::Point& sensorOriginTf, const PCLPointCl
   for(KeySet::iterator it = free_cells.begin(), end=free_cells.end(); it!= end; ++it){
     if (occupied_cells.find(*it) == occupied_cells.end()){
       m_octree->updateNode(*it, false);
-      OcTreeNodeStamped *newNode = m_merged_tree->updateNode(*it, false);
+      // Update the merged map.  Using the coordinate allows for different resolutions
+      OcTreeNodeStamped *newNode = m_merged_tree->updateNode(m_octree->keyToCoord(*it), false);
       newNode->setTimestamp(1);
     }
   }
@@ -464,7 +476,7 @@ void MarbleMapping::insertScan(const tf::Point& sensorOriginTf, const PCLPointCl
   // now mark all occupied cells:
   for (KeySet::iterator it = occupied_cells.begin(), end=occupied_cells.end(); it!= end; it++) {
     m_octree->updateNode(*it, true);
-    OcTreeNodeStamped *newNode = m_merged_tree->updateNode(*it, true);
+    OcTreeNodeStamped *newNode = m_merged_tree->updateNode(m_octree->keyToCoord(*it), true);
     newNode->setTimestamp(1);
   }
 
@@ -496,17 +508,19 @@ void MarbleMapping::insertScan(const tf::Point& sensorOriginTf, const PCLPointCl
 void MarbleMapping::updateDiff(const ros::TimerEvent& event) {
   // TODO Add a check to see if we're in comm with anyone, and if not, don't update the diff
   // Find all changed nodes since last update and create a new octomap
-  KeyBoolMap::const_iterator startPnt = m_octree->changedKeysBegin();
-  KeyBoolMap::const_iterator endPnt = m_octree->changedKeysEnd();
+  KeyBoolMap::const_iterator startPnt = m_merged_tree->changedKeysBegin();
+  KeyBoolMap::const_iterator endPnt = m_merged_tree->changedKeysEnd();
 
   m_diff_tree->clear();
 
   int num_nodes = 0;
   for (KeyBoolMap::const_iterator iter = startPnt; iter != endPnt; ++iter) {
     // Copy the value for each node
-    num_nodes++;
-    OcTreeNode* node = m_octree->search(iter->first);
-    m_diff_tree->setNodeValue(iter->first, node->getLogOdds());
+    OcTreeNodeStamped* node = m_merged_tree->search(iter->first);
+    if (node->getTimestamp() == 1) {
+      m_diff_tree->setNodeValue(iter->first, node->getLogOdds());
+      num_nodes++;
+    }
   }
 
   // Only update the diff map if enough has changed
@@ -527,7 +541,7 @@ void MarbleMapping::updateDiff(const ros::TimerEvent& event) {
     mapdiffs.num_octomaps = num_diffs;
     m_diffsMapPub.publish(mapdiffs);
 
-    m_octree->resetChangeDetection();
+    m_merged_tree->resetChangeDetection();
   }
 }
 

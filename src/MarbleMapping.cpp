@@ -88,6 +88,7 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_nh_private.param("min_x_size", m_minSizeX,m_minSizeX);
   m_nh_private.param("min_y_size", m_minSizeY,m_minSizeY);
 
+  m_nh_private.param("num_threads", m_numThreads, 1);
   m_nh_private.param("downsample_size", m_downsampleSize, 0.0);
   m_nh_private.param("filter_speckles", m_filterSpeckles, m_filterSpeckles);
   m_nh_private.param("filter_ground", m_filterGroundPlane, m_filterGroundPlane);
@@ -130,6 +131,17 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_treeDepth = m_octree->getTreeDepth();
   m_maxTreeDepth = m_treeDepth;
   m_gridmap.info.resolution = m_res;
+
+  #pragma omp parallel
+  #pragma omp master
+  {
+    // Set the number of threads, limited to maximum threads allowed by OMP_NUM_THREADS
+    if ((m_numThreads == 0) || (m_numThreads > omp_get_max_threads()))
+      m_numThreads = omp_get_num_threads();
+    ROS_INFO("Using %d threads of %d available", m_numThreads, omp_get_max_threads());
+    keyrays.resize(m_numThreads);
+  }
+  omp_set_num_threads(m_numThreads);
 
   m_merged_tree = new OcTreeStamped(m_mres);
   m_merged_tree->enableChangeDetection(true);
@@ -402,66 +414,95 @@ void MarbleMapping::insertScan(const tf::Point& sensorOriginTf, const PCLPointCl
 
   // instead of direct scan insertion, compute update to filter ground:
   KeySet free_cells, occupied_cells;
-  octomap::KeyRay m_keyRay;
+
+  // Profile our processing time
+  ros::WallTime startTime = ros::WallTime::now();
 
   // insert ground points only as free:
-  for (PCLPointCloud::const_iterator it = ground.begin(); it != ground.end(); ++it){
+  #pragma omp parallel for schedule(guided)
+  for (PCLPointCloud::const_iterator it = ground.begin(); it < ground.end(); ++it) {
     point3d point(it->x, it->y, it->z);
+    unsigned threadIdx = omp_get_thread_num();
+    KeyRay* keyRay = &(keyrays.at(threadIdx));
+
     // maxrange check
     if ((m_maxRange > 0.0) && ((point - sensorOrigin).norm() > m_maxRange) ) {
       point = sensorOrigin + (point - sensorOrigin).normalized() * m_maxRange;
     }
 
     // only clear space (ground points)
-    if (m_octree->computeRayKeys(sensorOrigin, point, m_keyRay)){
-      free_cells.insert(m_keyRay.begin(), m_keyRay.end());
+    if (m_octree->computeRayKeys(sensorOrigin, point, *keyRay)) {
+      #pragma omp critical(free_insert)
+      {
+        free_cells.insert(keyRay->begin(), keyRay->end());
+      }
     }
 
     octomap::OcTreeKey endKey;
-    if (m_octree->coordToKeyChecked(point, endKey)){
+    if (m_octree->coordToKeyChecked(point, endKey)) {
       updateMinKey(endKey, m_updateBBXMin);
       updateMaxKey(endKey, m_updateBBXMax);
-    } else{
+    } else {
       ROS_ERROR_STREAM("Could not generate Key for endpoint "<<point);
     }
   }
 
   // all other points: free on ray, occupied on endpoint:
-  for (PCLPointCloud::const_iterator it = nonground.begin(); it != nonground.end(); ++it){
+  #pragma omp parallel for schedule(guided)
+  for (PCLPointCloud::const_iterator it = nonground.begin(); it < nonground.end(); ++it) {
     point3d point(it->x, it->y, it->z);
+    unsigned threadIdx = omp_get_thread_num();
+    KeyRay* keyRay = &(keyrays.at(threadIdx));
+
     // maxrange check
     if ((m_maxRange < 0.0) || ((point - sensorOrigin).norm() <= m_maxRange) ) {
 
       // free cells
-      if (m_octree->computeRayKeys(sensorOrigin, point, m_keyRay)){
-        free_cells.insert(m_keyRay.begin(), m_keyRay.end());
+      if (m_octree->computeRayKeys(sensorOrigin, point, *keyRay)) {
+        #pragma omp critical(free_insert)
+        {
+          free_cells.insert(keyRay->begin(), keyRay->end());
+        }
       }
       // occupied endpoint
       OcTreeKey key;
-      if (m_octree->coordToKeyChecked(point, key)){
-        occupied_cells.insert(key);
+      if (m_octree->coordToKeyChecked(point, key)) {
+        #pragma omp critical(occupied_insert)
+        {
+          occupied_cells.insert(key);
+        }
 
         updateMinKey(key, m_updateBBXMin);
         updateMaxKey(key, m_updateBBXMax);
       }
     } else {// ray longer than maxrange:;
       point3d new_end = sensorOrigin + (point - sensorOrigin).normalized() * m_maxRange;
-      if (m_octree->computeRayKeys(sensorOrigin, new_end, m_keyRay)){
-        free_cells.insert(m_keyRay.begin(), m_keyRay.end());
-
-        octomap::OcTreeKey endKey;
-        if (m_octree->coordToKeyChecked(new_end, endKey)){
-          free_cells.insert(endKey);
-          updateMinKey(endKey, m_updateBBXMin);
-          updateMaxKey(endKey, m_updateBBXMax);
-        } else{
-          ROS_ERROR_STREAM("Could not generate Key for endpoint "<<new_end);
+      if (m_octree->computeRayKeys(sensorOrigin, new_end, *keyRay)) {
+        #pragma omp critical(free_insert)
+        {
+          free_cells.insert(keyRay->begin(), keyRay->end());
         }
 
+        octomap::OcTreeKey endKey;
+        if (m_octree->coordToKeyChecked(new_end, endKey)) {
+          #pragma omp critical(free_insert)
+          {
+            // This clears out previously occupied cells that were at the edge of the range
+            free_cells.insert(endKey);
+          }
 
+          updateMinKey(endKey, m_updateBBXMin);
+          updateMaxKey(endKey, m_updateBBXMax);
+        } else {
+          ROS_ERROR_STREAM("Could not generate Key for endpoint "<<new_end);
+        }
       }
     }
   }
+
+  // Find the total time for ray casting
+  double total_elapsed = (ros::WallTime::now() - startTime).toSec();
+  ROS_DEBUG("The %u points took %f seconds)", nonground.size(), total_elapsed);
 
   // mark free cells only if not seen occupied in this cloud
   for(KeySet::iterator it = free_cells.begin(), end=free_cells.end(); it!= end; ++it){

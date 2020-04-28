@@ -68,6 +68,7 @@
 #include <octomap/octomap.h>
 #include <octomap/OcTreeStamped.h>
 #include <octomap/OcTreeKey.h>
+#include <omp.h>
 
 #include "marble_mapping/OctomapArray.h"
 #include "marble_mapping/OctomapNeighbors.h"
@@ -218,6 +219,7 @@ protected:
   octomap::OcTreeStamped* m_merged_tree;
   octomap::OcTreeKey m_updateBBXMin;
   octomap::OcTreeKey m_updateBBXMax;
+  std::vector<octomap::KeyRay> keyrays;
 
   marble_mapping::OctomapArray mapdiffs;
   marble_mapping::OctomapNeighbors neighbors;
@@ -260,6 +262,7 @@ protected:
   double m_minSizeX;
   double m_minSizeY;
   double m_downsampleSize;
+  int m_numThreads;
   bool m_filterSpeckles;
 
   bool m_filterGroundPlane;

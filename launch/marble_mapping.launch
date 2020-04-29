@@ -6,6 +6,8 @@
   <arg name="merged_resolution" default="0.2" />
   <!-- Fixed map frame (set to 'map' if SLAM or localization running!) -->
   <arg name="frame_id" default="world" />
+  <!-- Data source to integrate (PointCloud2) -->
+  <arg name="cloud_in" default="points" />
   <!-- Maximum range to integrate (speedup!) -->
   <arg name="max_range" default="7.0" />
   <!-- Number of threads to use. Setting '0' or a value greater than maximum value
@@ -17,6 +19,16 @@
   <!-- Whether to publish merged maps -->
   <arg name="publish_merged_binary" default="true" />
   <arg name="publish_merged_full" default="false" />
+  <!-- Whether to publish the marker arrays and point cloud -->
+  <arg name="publish_marker_array" default="false" />
+  <arg name="publish_free_space" default="false" />
+  <arg name="publish_point_cloud" default="false" />
+  <!-- Number of new nodes required to create a new diff -->
+  <arg name="diff_threshold" default="1000" />
+  <!-- How many seconds to publish and reset diff map -->
+  <arg name="diff_duration" default="10.0" />
+  <!-- Remove ground plane occupancy from occupancy grid (boolean)-->
+  <arg name="filter_ground" default="false" />
 
   <node pkg="marble_mapping" type="marble_mapping_node" name="marble_mapping" output="screen">
     <param name="resolution" value="$(arg resolution)" />
@@ -29,21 +41,19 @@
     <param name="publish_merged_binary" value="$(arg publish_merged_binary)" />
     <param name="publish_merged_full" value="$(arg publish_merged_full)" />
 
-    <!-- Number of new nodes required to create a new diff -->
-    <param name="diff_threshold" value="1000" />
-    <!-- How many seconds to publish and reset diff map -->
-    <param name="diff_duration" value="10.0" />
+    <param name="publish_marker_array" value="$(arg publish_marker_array)" />
+    <param name="publish_free_space" value="$(arg publish_free_space)" />
+    <param name="publish_point_cloud" value="$(arg publish_point_cloud)" />
 
-    <!-- Data source to integrate (PointCloud2) -->
-    <remap from="cloud_in" to="points" />
+    <param name="diff_threshold" value="$(arg diff_threshold)" />
+    <param name="diff_duration" value="$(arg diff_duration)" />
+
+    <param name="filter_ground" value="$(arg filter_ground)" />
+
+    <remap from="cloud_in" to="$(arg cloud_in)" />
 
     <!-- The robot's base frame in which the ground plane detection is performed -->
     <!-- <remap from="base_frame_id" to="/X1/base_link" /> -->
 
-    <!-- Remove ground plane occupancy from occupancy grid (boolean)-->
-    <!-- <param name="filter_ground" value="false" /> -->
-
-    <!-- Publish free cells vis_array (boolean)-->
-    <param name="publish_free_space" value="true" />
   </node>
 </launch>

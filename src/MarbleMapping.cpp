@@ -49,10 +49,8 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_octree(NULL),
   m_maxRange(-1.0),
   m_worldFrameId("/map"), m_baseFrameId("base_footprint"),
-  m_useHeightMap(true),
   m_colorFactor(0.8),
   m_latchedTopics(true),
-  m_publishFreeSpace(false),
   m_res(0.05),
   m_treeDepth(0),
   m_maxTreeDepth(0),
@@ -64,17 +62,14 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_pointcloudMaxZ(std::numeric_limits<double>::max()),
   m_occupancyMinZ(-std::numeric_limits<double>::max()),
   m_occupancyMaxZ(std::numeric_limits<double>::max()),
-  m_minSizeX(0.0), m_minSizeY(0.0),
   m_filterSpeckles(false), m_filterGroundPlane(false),
   m_groundFilterDistance(0.04), m_groundFilterAngle(0.15), m_groundFilterPlaneDistance(0.07),
-  m_incrementalUpdate(false),
   m_initConfig(true)
 {
   double probHit, probMiss, thresMin, thresMax;
 
   m_nh_private.param("frame_id", m_worldFrameId, m_worldFrameId);
   m_nh_private.param("base_frame_id", m_baseFrameId, m_baseFrameId);
-  m_nh_private.param("height_map", m_useHeightMap, m_useHeightMap);
   m_nh_private.param("color_factor", m_colorFactor, m_colorFactor);
 
   m_nh_private.param("pointcloud_min_x", m_pointcloudMinX,m_pointcloudMinX);
@@ -85,8 +80,6 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_nh_private.param("pointcloud_max_z", m_pointcloudMaxZ,m_pointcloudMaxZ);
   m_nh_private.param("occupancy_min_z", m_occupancyMinZ,m_occupancyMinZ);
   m_nh_private.param("occupancy_max_z", m_occupancyMaxZ,m_occupancyMaxZ);
-  m_nh_private.param("min_x_size", m_minSizeX,m_minSizeX);
-  m_nh_private.param("min_y_size", m_minSizeY,m_minSizeY);
 
   m_nh_private.param("num_threads", m_numThreads, 1);
   m_nh_private.param("downsample_size", m_downsampleSize, 0.0);
@@ -107,9 +100,8 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_nh_private.param("sensor_model/miss", probMiss, 0.4);
   m_nh_private.param("sensor_model/min", thresMin, 0.12);
   m_nh_private.param("sensor_model/max", thresMax, 0.97);
-  m_nh_private.param("incremental_2D_projection", m_incrementalUpdate, m_incrementalUpdate);
-  m_nh_private.param("publish_merged_binary", publishMergedBinaryMap, true);
-  m_nh_private.param("publish_merged_full", publishMergedFullMap, false);
+  m_nh_private.param("publish_merged_binary", m_publishMergedBinaryMap, true);
+  m_nh_private.param("publish_merged_full", m_publishMergedFullMap, false);
 
   // Threshold for when to add map diffs
   m_nh_private.param("diff_threshold", diff_threshold, 1000);
@@ -130,7 +122,6 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_octree->setClampingThresMax(thresMax);
   m_treeDepth = m_octree->getTreeDepth();
   m_maxTreeDepth = m_treeDepth;
-  m_gridmap.info.resolution = m_res;
 
   #pragma omp parallel
   #pragma omp master
@@ -168,33 +159,43 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_colorFree.b = b;
   m_colorFree.a = a;
 
-  m_nh_private.param("publish_free_space", m_publishFreeSpace, m_publishFreeSpace);
+  m_nh_private.param("publish_marker_array", m_publishMarkerArray, false);
+  m_nh_private.param("publish_free_space", m_publishFreeSpace, false);
+  m_nh_private.param("publish_point_cloud", m_publishPointCloud, false);
 
   m_nh_private.param("latch", m_latchedTopics, m_latchedTopics);
-  if (m_latchedTopics){
-    ROS_INFO("Publishing latched (single publish will take longer, all topics are prepared)");
-  } else
-    ROS_INFO("Publishing non-latched (topics are only prepared as needed, will only be re-published on map change");
 
-  m_markerPub = m_nh.advertise<visualization_msgs::MarkerArray>("occupied_cells_vis_array", 1, m_latchedTopics);
+  // Normal octomap format map publishers
   m_binaryMapPub = m_nh.advertise<Octomap>("octomap_binary", 1, m_latchedTopics);
   m_fullMapPub = m_nh.advertise<Octomap>("octomap_full", 1, m_latchedTopics);
-  m_mergedBinaryMapPub = m_nh.advertise<Octomap>("merged_map", 1, m_latchedTopics);
-  m_mergedFullMapPub = m_nh.advertise<Octomap>("merged_map_full", 1, m_latchedTopics);
+
+  // Merged map publishers
+  if (m_publishMergedBinaryMap)
+    m_mergedBinaryMapPub = m_nh.advertise<Octomap>("merged_map", 1, m_latchedTopics);
+  if (m_publishMergedFullMap)
+    m_mergedFullMapPub = m_nh.advertise<Octomap>("merged_map_full", 1, m_latchedTopics);
+
+  // Diff map publishers
   m_diffMapPub = m_nh.advertise<Octomap>("map_diff", 1, m_latchedTopics);
   m_diffsMapPub = m_nh.advertise<marble_mapping::OctomapArray>("map_diffs", 1, m_latchedTopics);
-  m_pointCloudPub = m_nh.advertise<sensor_msgs::PointCloud2>("octomap_point_cloud_centers", 1, m_latchedTopics);
-  m_mapPub = m_nh.advertise<nav_msgs::OccupancyGrid>("projected_map", 5, m_latchedTopics);
-  m_fmarkerPub = m_nh.advertise<visualization_msgs::MarkerArray>("free_cells_vis_array", 1, m_latchedTopics);
 
+  // Optional marker array and point cloud publishers
+  if (m_publishMarkerArray)
+    m_markerPub = m_nh.advertise<visualization_msgs::MarkerArray>("occupied_cells_vis_array", 1, m_latchedTopics);
+  if (m_publishFreeSpace)
+  m_fmarkerPub = m_nh.advertise<visualization_msgs::MarkerArray>("free_cells_vis_array", 1, m_latchedTopics);
+  if (m_publishPointCloud)
+    m_pointCloudPub = m_nh.advertise<sensor_msgs::PointCloud2>("octomap_point_cloud_centers", 1, m_latchedTopics);
+
+  // Subscribers
   m_neighborsSub = m_nh.subscribe("neighbor_maps", 100, &MarbleMapping::neighborMapsCallback, this);
   m_pointCloudSub = new message_filters::Subscriber<sensor_msgs::PointCloud2> (m_nh, "cloud_in", 5);
   m_tfPointCloudSub = new tf::MessageFilter<sensor_msgs::PointCloud2> (*m_pointCloudSub, m_tfListener, m_worldFrameId, 5);
   m_tfPointCloudSub->registerCallback(boost::bind(&MarbleMapping::insertCloudCallback, this, _1));
 
+  // Services
   m_octomapBinaryService = m_nh.advertiseService("octomap_binary", &MarbleMapping::octomapBinarySrv, this);
   m_octomapFullService = m_nh.advertiseService("octomap_full", &MarbleMapping::octomapFullSrv, this);
-  m_clearBBXService = m_nh_private.advertiseService("clear_bbx", &MarbleMapping::clearBBXSrv, this);
   m_resetService = m_nh_private.advertiseService("reset", &MarbleMapping::resetSrv, this);
 
   // Timer for updating the local map diff that will be broadcast
@@ -265,19 +266,6 @@ bool MarbleMapping::openFile(const std::string& filename){
   m_treeDepth = m_octree->getTreeDepth();
   m_maxTreeDepth = m_treeDepth;
   m_res = m_octree->getResolution();
-  m_gridmap.info.resolution = m_res;
-  double minX, minY, minZ;
-  double maxX, maxY, maxZ;
-  m_octree->getMetricMin(minX, minY, minZ);
-  m_octree->getMetricMax(maxX, maxY, maxZ);
-
-  m_updateBBXMin[0] = m_octree->coordToKey(minX);
-  m_updateBBXMin[1] = m_octree->coordToKey(minY);
-  m_updateBBXMin[2] = m_octree->coordToKey(minZ);
-
-  m_updateBBXMax[0] = m_octree->coordToKey(maxX);
-  m_updateBBXMax[1] = m_octree->coordToKey(maxY);
-  m_updateBBXMax[2] = m_octree->coordToKey(maxZ);
 
   publishAll();
 
@@ -291,10 +279,10 @@ void MarbleMapping::neighborMapsCallback(const marble_mapping::OctomapNeighborsC
   mergeNeighbors();
   m_merged_tree->prune();
 
-  if (publishMergedBinaryMap)
+  if (m_publishMergedBinaryMap && m_mergedBinaryMapPub.getNumSubscribers() > 0)
     publishMergedBinaryOctoMap(ros::Time::now());
 
-  if (publishMergedFullMap)
+  if (m_publishMergedFullMap && m_mergedFullMapPub.getNumSubscribers() > 0)
     publishMergedFullOctoMap(ros::Time::now());
 }
 
@@ -406,12 +394,6 @@ void MarbleMapping::insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr
 void MarbleMapping::insertScan(const tf::Point& sensorOriginTf, const PCLPointCloud& ground, const PCLPointCloud& nonground){
   point3d sensorOrigin = pointTfToOctomap(sensorOriginTf);
 
-  if (!m_octree->coordToKeyChecked(sensorOrigin, m_updateBBXMin)
-    || !m_octree->coordToKeyChecked(sensorOrigin, m_updateBBXMax))
-  {
-    ROS_ERROR_STREAM("Could not generate Key for origin "<<sensorOrigin);
-  }
-
   // instead of direct scan insertion, compute update to filter ground:
   KeySet free_cells, occupied_cells;
 
@@ -436,14 +418,6 @@ void MarbleMapping::insertScan(const tf::Point& sensorOriginTf, const PCLPointCl
       {
         free_cells.insert(keyRay->begin(), keyRay->end());
       }
-    }
-
-    octomap::OcTreeKey endKey;
-    if (m_octree->coordToKeyChecked(point, endKey)) {
-      updateMinKey(endKey, m_updateBBXMin);
-      updateMaxKey(endKey, m_updateBBXMax);
-    } else {
-      ROS_ERROR_STREAM("Could not generate Key for endpoint "<<point);
     }
   }
 
@@ -471,9 +445,6 @@ void MarbleMapping::insertScan(const tf::Point& sensorOriginTf, const PCLPointCl
         {
           occupied_cells.insert(key);
         }
-
-        updateMinKey(key, m_updateBBXMin);
-        updateMaxKey(key, m_updateBBXMax);
       }
     } else {// ray longer than maxrange:;
       point3d new_end = sensorOrigin + (point - sensorOrigin).normalized() * m_maxRange;
@@ -490,9 +461,6 @@ void MarbleMapping::insertScan(const tf::Point& sensorOriginTf, const PCLPointCl
             // This clears out previously occupied cells that were at the edge of the range
             free_cells.insert(endKey);
           }
-
-          updateMinKey(endKey, m_updateBBXMin);
-          updateMaxKey(endKey, m_updateBBXMax);
         } else {
           ROS_ERROR_STREAM("Could not generate Key for endpoint "<<new_end);
         }
@@ -502,7 +470,7 @@ void MarbleMapping::insertScan(const tf::Point& sensorOriginTf, const PCLPointCl
 
   // Find the total time for ray casting
   double total_elapsed = (ros::WallTime::now() - startTime).toSec();
-  ROS_DEBUG("The %u points took %f seconds)", nonground.size(), total_elapsed);
+  ROS_DEBUG("The %zu points took %f seconds)", nonground.size(), total_elapsed);
 
   // mark free cells only if not seen occupied in this cloud
   for(KeySet::iterator it = free_cells.begin(), end=free_cells.end(); it!= end; ++it){
@@ -520,30 +488,6 @@ void MarbleMapping::insertScan(const tf::Point& sensorOriginTf, const PCLPointCl
     OcTreeNodeStamped *newNode = m_merged_tree->updateNode(m_octree->keyToCoord(*it), true);
     newNode->setTimestamp(1);
   }
-
-  // TODO: eval lazy+updateInner vs. proper insertion
-  // non-lazy by default (updateInnerOccupancy() too slow for large maps)
-  //m_octree->updateInnerOccupancy();
-  octomap::point3d minPt, maxPt;
-  ROS_DEBUG_STREAM("Bounding box keys (before): " << m_updateBBXMin[0] << " " <<m_updateBBXMin[1] << " " << m_updateBBXMin[2] << " / " <<m_updateBBXMax[0] << " "<<m_updateBBXMax[1] << " "<< m_updateBBXMax[2]);
-
-  // TODO: snap max / min keys to larger voxels by m_maxTreeDepth
-//   if (m_maxTreeDepth < 16)
-//   {
-//      OcTreeKey tmpMin = getIndexKey(m_updateBBXMin, m_maxTreeDepth); // this should give us the first key at depth m_maxTreeDepth that is smaller or equal to m_updateBBXMin (i.e. lower left in 2D grid coordinates)
-//      OcTreeKey tmpMax = getIndexKey(m_updateBBXMax, m_maxTreeDepth); // see above, now add something to find upper right
-//      tmpMax[0]+= m_octree->getNodeSize( m_maxTreeDepth ) - 1;
-//      tmpMax[1]+= m_octree->getNodeSize( m_maxTreeDepth ) - 1;
-//      tmpMax[2]+= m_octree->getNodeSize( m_maxTreeDepth ) - 1;
-//      m_updateBBXMin = tmpMin;
-//      m_updateBBXMax = tmpMax;
-//   }
-
-  // TODO: we could also limit the bbx to be within the map bounds here (see publishing check)
-  minPt = m_octree->keyToCoord(m_updateBBXMin);
-  maxPt = m_octree->keyToCoord(m_updateBBXMax);
-  ROS_DEBUG_STREAM("Updated area bounding box: "<< minPt << " - "<<maxPt);
-  ROS_DEBUG_STREAM("Bounding box keys (after): " << m_updateBBXMin[0] << " " <<m_updateBBXMin[1] << " " << m_updateBBXMin[2] << " / " <<m_updateBBXMax[0] << " "<<m_updateBBXMax[1] << " "<< m_updateBBXMax[2]);
 }
 
 void MarbleMapping::updateDiff(const ros::TimerEvent& event) {
@@ -665,75 +609,55 @@ void MarbleMapping::publishAll(const ros::Time& rostime){
     return;
   }
 
-  bool publishFreeMarkerArray = m_publishFreeSpace && (m_latchedTopics || m_fmarkerPub.getNumSubscribers() > 0);
-  bool publishMarkerArray = (m_latchedTopics || m_markerPub.getNumSubscribers() > 0);
-  bool publishPointCloud = (m_latchedTopics || m_pointCloudPub.getNumSubscribers() > 0);
-  bool publishBinaryMap = (m_latchedTopics || m_binaryMapPub.getNumSubscribers() > 0);
-  bool publishFullMap = (m_latchedTopics || m_fullMapPub.getNumSubscribers() > 0);
-  m_publish2DMap = (m_latchedTopics || m_mapPub.getNumSubscribers() > 0);
-
-  // init markers for free space:
-  visualization_msgs::MarkerArray freeNodesVis;
-  // each array stores all cubes of a different size, one for each depth level:
-  freeNodesVis.markers.resize(m_treeDepth+1);
-
-  geometry_msgs::Pose pose;
-  pose.orientation = tf::createQuaternionMsgFromYaw(0.0);
+  bool publishFreeMarkerArray = m_publishFreeSpace && (m_fmarkerPub.getNumSubscribers() > 0);
+  bool publishMarkerArray = m_publishMarkerArray && (m_markerPub.getNumSubscribers() > 0);
+  bool publishPointCloud = m_publishPointCloud && (m_pointCloudPub.getNumSubscribers() > 0);
+  bool publishMergedBinaryMap = m_publishMergedBinaryMap && (m_mergedBinaryMapPub.getNumSubscribers() > 0);
+  bool publishMergedFullMap = m_publishMergedFullMap && (m_mergedFullMapPub.getNumSubscribers() > 0);
+  bool publishBinaryMap = (m_binaryMapPub.getNumSubscribers() > 0);
+  bool publishFullMap = (m_fullMapPub.getNumSubscribers() > 0);
 
   // init markers:
-  visualization_msgs::MarkerArray occupiedNodesVis;
-  // each array stores all cubes of a different size, one for each depth level:
-  occupiedNodesVis.markers.resize(m_treeDepth+1);
+  visualization_msgs::MarkerArray freeNodesVis, occupiedNodesVis;
 
   // init pointcloud:
   pcl::PointCloud<PCLPoint> pclCloud;
 
-  // call pre-traversal hook:
-  handlePreNodeTraversal(rostime);
+  // Only traverse the tree if we're publishing a marker array or point cloud
+  if (publishMarkerArray || publishFreeMarkerArray || publishPointCloud) {
+    // each array stores all cubes of a different size, one for each depth level:
+    freeNodesVis.markers.resize(m_treeDepth+1);
+    occupiedNodesVis.markers.resize(m_treeDepth+1);
 
-  // now, traverse all leafs in the tree:
-  for (OcTreeT::iterator it = m_octree->begin(m_maxTreeDepth),
-      end = m_octree->end(); it != end; ++it)
-  {
-    bool inUpdateBBX = isInUpdateBBX(it);
+    // now, traverse all leafs in the tree:
+    for (OcTreeT::iterator it = m_octree->begin(m_maxTreeDepth),
+        end = m_octree->end(); it != end; ++it) {
+      if (m_octree->isNodeOccupied(*it)) {
+        double z = it.getZ();
+        double half_size = it.getSize() / 2.0;
+        if (z + half_size > m_occupancyMinZ && z - half_size < m_occupancyMaxZ)
+        {
+          double size = it.getSize();
+          double x = it.getX();
+          double y = it.getY();
 
-    // call general hook:
-    handleNode(it);
-    if (inUpdateBBX)
-      handleNodeInBBX(it);
+          // Ignore speckles in the map:
+          if (m_filterSpeckles && (it.getDepth() == m_treeDepth +1) && isSpeckleNode(it.getKey())) {
+            ROS_DEBUG("Ignoring single speckle at (%f,%f,%f)", x, y, z);
+            continue;
+          } // else: current octree node is no speckle, send it out
 
-    if (m_octree->isNodeOccupied(*it)){
-      double z = it.getZ();
-      double half_size = it.getSize() / 2.0;
-      if (z + half_size > m_occupancyMinZ && z - half_size < m_occupancyMaxZ)
-      {
-        double size = it.getSize();
-        double x = it.getX();
-        double y = it.getY();
+          //create marker:
+          if (publishMarkerArray) {
+            unsigned idx = it.getDepth();
+            assert(idx < occupiedNodesVis.markers.size());
 
-        // Ignore speckles in the map:
-        if (m_filterSpeckles && (it.getDepth() == m_treeDepth +1) && isSpeckleNode(it.getKey())){
-          ROS_DEBUG("Ignoring single speckle at (%f,%f,%f)", x, y, z);
-          continue;
-        } // else: current octree node is no speckle, send it out
+            geometry_msgs::Point cubeCenter;
+            cubeCenter.x = x;
+            cubeCenter.y = y;
+            cubeCenter.z = z;
 
-        handleOccupiedNode(it);
-        if (inUpdateBBX)
-          handleOccupiedNodeInBBX(it);
-
-
-        //create marker:
-        if (publishMarkerArray){
-          unsigned idx = it.getDepth();
-          assert(idx < occupiedNodesVis.markers.size());
-
-          geometry_msgs::Point cubeCenter;
-          cubeCenter.x = x;
-          cubeCenter.y = y;
-          cubeCenter.z = z;
-
-          occupiedNodesVis.markers[idx].points.push_back(cubeCenter);
-          if (m_useHeightMap){
+            occupiedNodesVis.markers[idx].points.push_back(cubeCenter);
             double minX, minY, minZ, maxX, maxY, maxZ;
             m_octree->getMetricMin(minX, minY, minZ);
             m_octree->getMetricMax(maxX, maxY, maxZ);
@@ -741,47 +665,38 @@ void MarbleMapping::publishAll(const ros::Time& rostime){
             double h = (1.0 - std::min(std::max((cubeCenter.z-minZ)/ (maxZ - minZ), 0.0), 1.0)) *m_colorFactor;
             occupiedNodesVis.markers[idx].colors.push_back(heightMapColor(h));
           }
+
+          // insert into pointcloud:
+          if (publishPointCloud) {
+            pclCloud.push_back(PCLPoint(x, y, z));
+          }
+
         }
+      } else { // node not occupied => mark as free in 2D map if unknown so far
+        double z = it.getZ();
+        double half_size = it.getSize() / 2.0;
+        if (z + half_size > m_occupancyMinZ && z - half_size < m_occupancyMaxZ) {
+          if (m_publishFreeSpace) {
+            double x = it.getX();
+            double y = it.getY();
 
-        // insert into pointcloud:
-        if (publishPointCloud) {
-          pclCloud.push_back(PCLPoint(x, y, z));
-        }
+            //create marker for free space:
+            if (publishFreeMarkerArray) {
+              unsigned idx = it.getDepth();
+              assert(idx < freeNodesVis.markers.size());
 
-      }
-    } else{ // node not occupied => mark as free in 2D map if unknown so far
-      double z = it.getZ();
-      double half_size = it.getSize() / 2.0;
-      if (z + half_size > m_occupancyMinZ && z - half_size < m_occupancyMaxZ)
-      {
-        handleFreeNode(it);
-        if (inUpdateBBX)
-          handleFreeNodeInBBX(it);
+              geometry_msgs::Point cubeCenter;
+              cubeCenter.x = x;
+              cubeCenter.y = y;
+              cubeCenter.z = z;
 
-        if (m_publishFreeSpace){
-          double x = it.getX();
-          double y = it.getY();
-
-          //create marker for free space:
-          if (publishFreeMarkerArray){
-            unsigned idx = it.getDepth();
-            assert(idx < freeNodesVis.markers.size());
-
-            geometry_msgs::Point cubeCenter;
-            cubeCenter.x = x;
-            cubeCenter.y = y;
-            cubeCenter.z = z;
-
-            freeNodesVis.markers[idx].points.push_back(cubeCenter);
+              freeNodesVis.markers[idx].points.push_back(cubeCenter);
+            }
           }
         }
-
       }
     }
   }
-
-  // call post-traversal hook:
-  handlePostNodeTraversal(rostime);
 
   // finish MarkerArray:
   if (publishMarkerArray){
@@ -891,38 +806,11 @@ bool MarbleMapping::octomapFullSrv(OctomapSrv::Request  &req,
   return true;
 }
 
-bool MarbleMapping::clearBBXSrv(BBXSrv::Request& req, BBXSrv::Response& resp){
-  point3d min = pointMsgToOctomap(req.min);
-  point3d max = pointMsgToOctomap(req.max);
-
-  double thresMin = m_octree->getClampingThresMin();
-  for(OcTreeT::leaf_bbx_iterator it = m_octree->begin_leafs_bbx(min,max),
-      end=m_octree->end_leafs_bbx(); it!= end; ++it){
-
-    it->setLogOdds(octomap::logodds(thresMin));
-    //			m_octree->updateNode(it.getKey(), -6.0f);
-  }
-  // TODO: eval which is faster (setLogOdds+updateInner or updateNode)
-  m_octree->updateInnerOccupancy();
-
-  publishAll(ros::Time::now());
-
-  return true;
-}
-
 bool MarbleMapping::resetSrv(std_srvs::Empty::Request& req, std_srvs::Empty::Response& resp) {
   visualization_msgs::MarkerArray occupiedNodesVis;
   occupiedNodesVis.markers.resize(m_treeDepth +1);
   ros::Time rostime = ros::Time::now();
   m_octree->clear();
-  // clear 2D map:
-  m_gridmap.data.clear();
-  m_gridmap.info.height = 0.0;
-  m_gridmap.info.width = 0.0;
-  m_gridmap.info.resolution = 0.0;
-  m_gridmap.info.origin.position.x = 0.0;
-  m_gridmap.info.origin.position.y = 0.0;
-
   ROS_INFO("Cleared octomap");
   publishAll(rostime);
 
@@ -1115,183 +1003,6 @@ void MarbleMapping::filterGroundPlane(const PCLPointCloud& pc, PCLPointCloud& gr
 
 }
 
-void MarbleMapping::handlePreNodeTraversal(const ros::Time& rostime){
-  if (m_publish2DMap){
-    // init projected 2D map:
-    m_gridmap.header.frame_id = m_worldFrameId;
-    m_gridmap.header.stamp = rostime;
-    nav_msgs::MapMetaData oldMapInfo = m_gridmap.info;
-
-    // TODO: move most of this stuff into c'tor and init map only once (adjust if size changes)
-    double minX, minY, minZ, maxX, maxY, maxZ;
-    m_octree->getMetricMin(minX, minY, minZ);
-    m_octree->getMetricMax(maxX, maxY, maxZ);
-
-    octomap::point3d minPt(minX, minY, minZ);
-    octomap::point3d maxPt(maxX, maxY, maxZ);
-    octomap::OcTreeKey minKey = m_octree->coordToKey(minPt, m_maxTreeDepth);
-    octomap::OcTreeKey maxKey = m_octree->coordToKey(maxPt, m_maxTreeDepth);
-
-    ROS_DEBUG("MinKey: %d %d %d / MaxKey: %d %d %d", minKey[0], minKey[1], minKey[2], maxKey[0], maxKey[1], maxKey[2]);
-
-    // add padding if requested (= new min/maxPts in x&y):
-    double halfPaddedX = 0.5*m_minSizeX;
-    double halfPaddedY = 0.5*m_minSizeY;
-    minX = std::min(minX, -halfPaddedX);
-    maxX = std::max(maxX, halfPaddedX);
-    minY = std::min(minY, -halfPaddedY);
-    maxY = std::max(maxY, halfPaddedY);
-    minPt = octomap::point3d(minX, minY, minZ);
-    maxPt = octomap::point3d(maxX, maxY, maxZ);
-
-    OcTreeKey paddedMaxKey;
-    if (!m_octree->coordToKeyChecked(minPt, m_maxTreeDepth, m_paddedMinKey)){
-      ROS_ERROR("Could not create padded min OcTree key at %f %f %f", minPt.x(), minPt.y(), minPt.z());
-      return;
-    }
-    if (!m_octree->coordToKeyChecked(maxPt, m_maxTreeDepth, paddedMaxKey)){
-      ROS_ERROR("Could not create padded max OcTree key at %f %f %f", maxPt.x(), maxPt.y(), maxPt.z());
-      return;
-    }
-
-    ROS_DEBUG("Padded MinKey: %d %d %d / padded MaxKey: %d %d %d", m_paddedMinKey[0], m_paddedMinKey[1], m_paddedMinKey[2], paddedMaxKey[0], paddedMaxKey[1], paddedMaxKey[2]);
-    assert(paddedMaxKey[0] >= maxKey[0] && paddedMaxKey[1] >= maxKey[1]);
-
-    m_multires2DScale = 1 << (m_treeDepth - m_maxTreeDepth);
-    m_gridmap.info.width = (paddedMaxKey[0] - m_paddedMinKey[0])/m_multires2DScale +1;
-    m_gridmap.info.height = (paddedMaxKey[1] - m_paddedMinKey[1])/m_multires2DScale +1;
-
-    int mapOriginX = minKey[0] - m_paddedMinKey[0];
-    int mapOriginY = minKey[1] - m_paddedMinKey[1];
-    assert(mapOriginX >= 0 && mapOriginY >= 0);
-
-    // might not exactly be min / max of octree:
-    octomap::point3d origin = m_octree->keyToCoord(m_paddedMinKey, m_treeDepth);
-    double gridRes = m_octree->getNodeSize(m_maxTreeDepth);
-    m_projectCompleteMap = (!m_incrementalUpdate || (std::abs(gridRes-m_gridmap.info.resolution) > 1e-6));
-    m_gridmap.info.resolution = gridRes;
-    m_gridmap.info.origin.position.x = origin.x() - gridRes*0.5;
-    m_gridmap.info.origin.position.y = origin.y() - gridRes*0.5;
-    if (m_maxTreeDepth != m_treeDepth){
-      m_gridmap.info.origin.position.x -= m_res/2.0;
-      m_gridmap.info.origin.position.y -= m_res/2.0;
-    }
-
-    // workaround for  multires. projection not working properly for inner nodes:
-    // force re-building complete map
-    if (m_maxTreeDepth < m_treeDepth)
-      m_projectCompleteMap = true;
-
-
-    if(m_projectCompleteMap){
-      ROS_DEBUG("Rebuilding complete 2D map");
-      m_gridmap.data.clear();
-      // init to unknown:
-      m_gridmap.data.resize(m_gridmap.info.width * m_gridmap.info.height, -1);
-
-    } else {
-
-       if (mapChanged(oldMapInfo, m_gridmap.info)){
-          ROS_DEBUG("2D grid map size changed to %dx%d", m_gridmap.info.width, m_gridmap.info.height);
-          adjustMapData(m_gridmap, oldMapInfo);
-       }
-       nav_msgs::OccupancyGrid::_data_type::iterator startIt;
-       size_t mapUpdateBBXMinX = std::max(0, (int(m_updateBBXMin[0]) - int(m_paddedMinKey[0]))/int(m_multires2DScale));
-       size_t mapUpdateBBXMinY = std::max(0, (int(m_updateBBXMin[1]) - int(m_paddedMinKey[1]))/int(m_multires2DScale));
-       size_t mapUpdateBBXMaxX = std::min(int(m_gridmap.info.width-1), (int(m_updateBBXMax[0]) - int(m_paddedMinKey[0]))/int(m_multires2DScale));
-       size_t mapUpdateBBXMaxY = std::min(int(m_gridmap.info.height-1), (int(m_updateBBXMax[1]) - int(m_paddedMinKey[1]))/int(m_multires2DScale));
-
-       assert(mapUpdateBBXMaxX > mapUpdateBBXMinX);
-       assert(mapUpdateBBXMaxY > mapUpdateBBXMinY);
-
-       size_t numCols = mapUpdateBBXMaxX-mapUpdateBBXMinX +1;
-
-       // test for max idx:
-       uint max_idx = m_gridmap.info.width*mapUpdateBBXMaxY + mapUpdateBBXMaxX;
-       if (max_idx  >= m_gridmap.data.size())
-         ROS_ERROR("BBX index not valid: %d (max index %zu for size %d x %d) update-BBX is: [%zu %zu]-[%zu %zu]", max_idx, m_gridmap.data.size(), m_gridmap.info.width, m_gridmap.info.height, mapUpdateBBXMinX, mapUpdateBBXMinY, mapUpdateBBXMaxX, mapUpdateBBXMaxY);
-
-       // reset proj. 2D map in bounding box:
-       for (unsigned int j = mapUpdateBBXMinY; j <= mapUpdateBBXMaxY; ++j){
-          std::fill_n(m_gridmap.data.begin() + m_gridmap.info.width*j+mapUpdateBBXMinX,
-                      numCols, -1);
-       }
-
-    }
-
-
-
-  }
-
-}
-
-void MarbleMapping::handlePostNodeTraversal(const ros::Time& rostime){
-
-  if (m_publish2DMap)
-    m_mapPub.publish(m_gridmap);
-}
-
-void MarbleMapping::handleOccupiedNode(const OcTreeT::iterator& it){
-
-  if (m_publish2DMap && m_projectCompleteMap){
-    update2DMap(it, true);
-  }
-}
-
-void MarbleMapping::handleFreeNode(const OcTreeT::iterator& it){
-
-  if (m_publish2DMap && m_projectCompleteMap){
-    update2DMap(it, false);
-  }
-}
-
-void MarbleMapping::handleOccupiedNodeInBBX(const OcTreeT::iterator& it){
-
-  if (m_publish2DMap && !m_projectCompleteMap){
-    update2DMap(it, true);
-  }
-}
-
-void MarbleMapping::handleFreeNodeInBBX(const OcTreeT::iterator& it){
-
-  if (m_publish2DMap && !m_projectCompleteMap){
-    update2DMap(it, false);
-  }
-}
-
-void MarbleMapping::update2DMap(const OcTreeT::iterator& it, bool occupied){
-
-  // update 2D map (occupied always overrides):
-
-  if (it.getDepth() == m_maxTreeDepth){
-    unsigned idx = mapIdx(it.getKey());
-    if (occupied)
-      m_gridmap.data[mapIdx(it.getKey())] = 100;
-    else if (m_gridmap.data[idx] == -1){
-      m_gridmap.data[idx] = 0;
-    }
-
-  } else{
-    int intSize = 1 << (m_maxTreeDepth - it.getDepth());
-    octomap::OcTreeKey minKey=it.getIndexKey();
-    for(int dx=0; dx < intSize; dx++){
-      int i = (minKey[0]+dx - m_paddedMinKey[0])/m_multires2DScale;
-      for(int dy=0; dy < intSize; dy++){
-        unsigned idx = mapIdx(i, (minKey[1]+dy - m_paddedMinKey[1])/m_multires2DScale);
-        if (occupied)
-          m_gridmap.data[idx] = 100;
-        else if (m_gridmap.data[idx] == -1){
-          m_gridmap.data[idx] = 0;
-        }
-      }
-    }
-  }
-
-
-}
-
-
-
 bool MarbleMapping::isSpeckleNode(const OcTreeKey&nKey) const {
   OcTreeKey key;
   bool neighborFound = false;
@@ -1322,7 +1033,6 @@ void MarbleMapping::reconfigureCallback(marble_mapping::MarbleMappingConfig& con
     m_occupancyMaxZ             = config.occupancy_max_z;
     m_filterSpeckles            = config.filter_speckles;
     m_filterGroundPlane         = config.filter_ground;
-    m_incrementalUpdate         = config.incremental_2D_projection;
 
     // Parameters with a namespace require an special treatment at the beginning, as dynamic reconfigure
     // will overwrite them because the server is not able to match parameters' names.
@@ -1368,47 +1078,6 @@ void MarbleMapping::reconfigureCallback(marble_mapping::MarbleMappingConfig& con
   }
   publishAll();
 }
-
-void MarbleMapping::adjustMapData(nav_msgs::OccupancyGrid& map, const nav_msgs::MapMetaData& oldMapInfo) const{
-  if (map.info.resolution != oldMapInfo.resolution){
-    ROS_ERROR("Resolution of map changed, cannot be adjusted");
-    return;
-  }
-
-  int i_off = int((oldMapInfo.origin.position.x - map.info.origin.position.x)/map.info.resolution +0.5);
-  int j_off = int((oldMapInfo.origin.position.y - map.info.origin.position.y)/map.info.resolution +0.5);
-
-  if (i_off < 0 || j_off < 0
-      || oldMapInfo.width  + i_off > map.info.width
-      || oldMapInfo.height + j_off > map.info.height)
-  {
-    ROS_ERROR("New 2D map does not contain old map area, this case is not implemented");
-    return;
-  }
-
-  nav_msgs::OccupancyGrid::_data_type oldMapData = map.data;
-
-  map.data.clear();
-  // init to unknown:
-  map.data.resize(map.info.width * map.info.height, -1);
-
-  nav_msgs::OccupancyGrid::_data_type::iterator fromStart, fromEnd, toStart;
-
-  for (int j =0; j < int(oldMapInfo.height); ++j ){
-    // copy chunks, row by row:
-    fromStart = oldMapData.begin() + j*oldMapInfo.width;
-    fromEnd = fromStart + oldMapInfo.width;
-    toStart = map.data.begin() + ((j+j_off)*m_gridmap.info.width + i_off);
-    copy(fromStart, fromEnd, toStart);
-
-//    for (int i =0; i < int(oldMapInfo.width); ++i){
-//      map.data[m_gridmap.info.width*(j+j_off) +i+i_off] = oldMapData[oldMapInfo.width*j +i];
-//    }
-
-  }
-
-}
-
 
 std_msgs::ColorRGBA MarbleMapping::heightMapColor(double h) {
 
@@ -1459,6 +1128,3 @@ std_msgs::ColorRGBA MarbleMapping::heightMapColor(double h) {
   return color;
 }
 }
-
-
-

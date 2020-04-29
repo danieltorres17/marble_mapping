@@ -33,11 +33,8 @@
 
 #include <ros/ros.h>
 #include <visualization_msgs/MarkerArray.h>
-#include <nav_msgs/OccupancyGrid.h>
 #include <std_msgs/ColorRGBA.h>
 
-// #include <moveit_msgs/CollisionObject.h>
-// #include <moveit_msgs/CollisionMap.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <std_srvs/Empty.h>
 #include <dynamic_reconfigure/server.h>
@@ -61,7 +58,6 @@
 #include <message_filters/subscriber.h>
 #include <octomap_msgs/Octomap.h>
 #include <octomap_msgs/GetOctomap.h>
-#include <octomap_msgs/BoundingBoxQuery.h>
 #include <octomap_msgs/conversions.h>
 
 #include <octomap_ros/conversions.h>
@@ -81,13 +77,11 @@ public:
   typedef pcl::PointCloud<pcl::PointXYZ> PCLPointCloud;
   typedef octomap::OcTree OcTreeT;
   typedef octomap_msgs::GetOctomap OctomapSrv;
-  typedef octomap_msgs::BoundingBoxQuery BBXSrv;
 
   MarbleMapping(const ros::NodeHandle private_nh_ = ros::NodeHandle("~"), const ros::NodeHandle &nh_ = ros::NodeHandle());
   virtual ~MarbleMapping();
   virtual bool octomapBinarySrv(OctomapSrv::Request  &req, OctomapSrv::GetOctomap::Response &res);
   virtual bool octomapFullSrv(OctomapSrv::Request  &req, OctomapSrv::GetOctomap::Response &res);
-  bool clearBBXSrv(BBXSrv::Request& req, BBXSrv::Response& resp);
   bool resetSrv(std_srvs::Empty::Request& req, std_srvs::Empty::Response& resp);
 
   virtual void neighborMapsCallback(const marble_mapping::OctomapNeighborsConstPtr& msg);
@@ -95,27 +89,6 @@ public:
   virtual bool openFile(const std::string& filename);
 
 protected:
-  inline static void updateMinKey(const octomap::OcTreeKey& in, octomap::OcTreeKey& min) {
-    for (unsigned i = 0; i < 3; ++i)
-      min[i] = std::min(in[i], min[i]);
-  };
-
-  inline static void updateMaxKey(const octomap::OcTreeKey& in, octomap::OcTreeKey& max) {
-    for (unsigned i = 0; i < 3; ++i)
-      max[i] = std::max(in[i], max[i]);
-  };
-
-  /// Test if key is within update area of map (2D, ignores height)
-  inline bool isInUpdateBBX(const OcTreeT::iterator& it) const {
-    // 2^(tree_depth-depth) voxels wide:
-    unsigned voxelWidth = (1 << (m_maxTreeDepth - it.getDepth()));
-    octomap::OcTreeKey key = it.getIndexKey(); // lower corner of voxel
-    return (key[0] + voxelWidth >= m_updateBBXMin[0]
-            && key[1] + voxelWidth >= m_updateBBXMin[1]
-            && key[0] <= m_updateBBXMax[0]
-            && key[1] <= m_updateBBXMax[1]);
-  }
-
   void reconfigureCallback(marble_mapping::MarbleMappingConfig& config, uint32_t level);
   void publishBinaryOctoMap(const ros::Time& rostime = ros::Time::now()) const;
   void publishFullOctoMap(const ros::Time& rostime = ros::Time::now()) const;
@@ -149,66 +122,14 @@ protected:
   */
   bool isSpeckleNode(const octomap::OcTreeKey& key) const;
 
-  /// hook that is called before traversing all nodes
-  virtual void handlePreNodeTraversal(const ros::Time& rostime);
-
-  /// hook that is called when traversing all nodes of the updated Octree (does nothing here)
-  virtual void handleNode(const OcTreeT::iterator& it) {};
-
-  /// hook that is called when traversing all nodes of the updated Octree in the updated area (does nothing here)
-  virtual void handleNodeInBBX(const OcTreeT::iterator& it) {};
-
-  /// hook that is called when traversing occupied nodes of the updated Octree
-  virtual void handleOccupiedNode(const OcTreeT::iterator& it);
-
-  /// hook that is called when traversing occupied nodes in the updated area (updates 2D map projection here)
-  virtual void handleOccupiedNodeInBBX(const OcTreeT::iterator& it);
-
-  /// hook that is called when traversing free nodes of the updated Octree
-  virtual void handleFreeNode(const OcTreeT::iterator& it);
-
-  /// hook that is called when traversing free nodes in the updated area (updates 2D map projection here)
-  virtual void handleFreeNodeInBBX(const OcTreeT::iterator& it);
-
-  /// hook that is called after traversing all nodes
-  virtual void handlePostNodeTraversal(const ros::Time& rostime);
-
-  /// updates the downprojected 2D map as either occupied or free
-  virtual void update2DMap(const OcTreeT::iterator& it, bool occupied);
-
-  inline unsigned mapIdx(int i, int j) const {
-    return m_gridmap.info.width * j + i;
-  }
-
-  inline unsigned mapIdx(const octomap::OcTreeKey& key) const {
-    return mapIdx((key[0] - m_paddedMinKey[0]) / m_multires2DScale,
-                  (key[1] - m_paddedMinKey[1]) / m_multires2DScale);
-
-  }
-
-  /**
-   * Adjust data of map due to a change in its info properties (origin or size,
-   * resolution needs to stay fixed). map already contains the new map info,
-   * but the data is stored according to oldMapInfo.
-   */
-
-  void adjustMapData(nav_msgs::OccupancyGrid& map, const nav_msgs::MapMetaData& oldMapInfo) const;
-
-  inline bool mapChanged(const nav_msgs::MapMetaData& oldMapInfo, const nav_msgs::MapMetaData& newMapInfo) {
-    return (    oldMapInfo.height != newMapInfo.height
-                || oldMapInfo.width != newMapInfo.width
-                || oldMapInfo.origin.position.x != newMapInfo.origin.position.x
-                || oldMapInfo.origin.position.y != newMapInfo.origin.position.y);
-  }
-
   static std_msgs::ColorRGBA heightMapColor(double h);
   ros::NodeHandle m_nh;
   ros::NodeHandle m_nh_private;
-  ros::Publisher  m_markerPub, m_binaryMapPub, m_fullMapPub, m_mergedBinaryMapPub, m_mergedFullMapPub, m_diffMapPub, m_diffsMapPub, m_pointCloudPub, m_collisionObjectPub, m_mapPub, m_cmapPub, m_fmapPub, m_fmarkerPub;
+  ros::Publisher  m_markerPub, m_binaryMapPub, m_fullMapPub, m_mergedBinaryMapPub, m_mergedFullMapPub, m_diffMapPub, m_diffsMapPub, m_pointCloudPub, m_fmarkerPub;
   ros::Subscriber m_neighborsSub;
   message_filters::Subscriber<sensor_msgs::PointCloud2>* m_pointCloudSub;
   tf::MessageFilter<sensor_msgs::PointCloud2>* m_tfPointCloudSub;
-  ros::ServiceServer m_octomapBinaryService, m_octomapFullService, m_clearBBXService, m_resetService;
+  ros::ServiceServer m_octomapBinaryService, m_octomapFullService, m_resetService;
   ros::Timer diff_timer;
   tf::TransformListener m_tfListener;
   boost::recursive_mutex m_config_mutex;
@@ -217,8 +138,6 @@ protected:
   OcTreeT* m_octree;
   OcTreeT* m_diff_tree;
   octomap::OcTreeStamped* m_merged_tree;
-  octomap::OcTreeKey m_updateBBXMin;
-  octomap::OcTreeKey m_updateBBXMax;
   std::vector<octomap::KeyRay> keyrays;
 
   marble_mapping::OctomapArray mapdiffs;
@@ -227,21 +146,21 @@ protected:
   double m_maxRange;
   std::string m_worldFrameId; // the map frame
   std::string m_baseFrameId; // base of the robot for ground plane filtering
-  bool m_useHeightMap;
   std_msgs::ColorRGBA m_color;
   std_msgs::ColorRGBA m_colorFree;
   double m_colorFactor;
 
   bool m_latchedTopics;
+  bool m_publishMarkerArray;
   bool m_publishFreeSpace;
+  bool m_publishPointCloud;
+  bool m_publishMergedBinaryMap;
+  bool m_publishMergedFullMap;
 
   double m_res;
   double m_mres;
   unsigned m_treeDepth;
   unsigned m_maxTreeDepth;
-
-  bool publishMergedBinaryMap;
-  bool publishMergedFullMap;
 
   // Diff parameters
   int diff_threshold;
@@ -259,8 +178,6 @@ protected:
   double m_pointcloudMaxZ;
   double m_occupancyMinZ;
   double m_occupancyMaxZ;
-  double m_minSizeX;
-  double m_minSizeY;
   double m_downsampleSize;
   int m_numThreads;
   bool m_filterSpeckles;
@@ -271,16 +188,6 @@ protected:
   double m_groundFilterPlaneDistance;
 
   bool m_initConfig;
-
-  // downprojected 2D map:
-  bool m_incrementalUpdate;
-  nav_msgs::OccupancyGrid m_gridmap;
-  bool m_publish2DMap;
-  bool m_mapOriginChanged;
-  octomap::OcTreeKey m_paddedMinKey;
-  unsigned m_multires2DScale;
-  bool m_projectCompleteMap;
-  bool m_useColoredMap;
 };
 }
 

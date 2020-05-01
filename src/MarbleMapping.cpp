@@ -136,7 +136,17 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
 
   m_merged_tree = new OcTreeStamped(m_mres);
   m_merged_tree->enableChangeDetection(true);
+  m_merged_tree->setProbHit(probHit);
+  m_merged_tree->setProbMiss(probMiss);
+  m_merged_tree->setClampingThresMin(thresMin);
+  m_merged_tree->setClampingThresMax(thresMax);
+
   m_diff_tree = new OcTreeT(m_mres);
+  m_diff_tree->setProbHit(probHit);
+  m_diff_tree->setProbMiss(probMiss);
+  m_diff_tree->setClampingThresMin(thresMin);
+  m_diff_tree->setClampingThresMax(thresMax);
+
   num_diffs = 0;
   next_idx = 2;
 

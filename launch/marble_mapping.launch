@@ -30,6 +30,11 @@
   <!-- Remove ground plane occupancy from occupancy grid (boolean)-->
   <arg name="filter_ground" default="false" />
 
+  <arg name="sensor_model/hit" default=".95" />
+  <arg name="sensor_model/miss" default=".48" />
+  <arg name="sensor_model/min" default=".12" />
+  <arg name="sensor_model/max" default=".97" />
+
   <node pkg="marble_mapping" type="marble_mapping_node" name="marble_mapping" output="screen">
     <param name="resolution" value="$(arg resolution)" />
     <param name="merged_resolution" value="$(arg merged_resolution)" />
@@ -49,6 +54,11 @@
     <param name="diff_duration" value="$(arg diff_duration)" />
 
     <param name="filter_ground" value="$(arg filter_ground)" />
+
+    <param name="sensor_model/hit" value="$(arg sensor_model/hit)" />
+    <param name="sensor_model/miss" value="$(arg sensor_model/miss)" />
+    <param name="sensor_model/min" value="$(arg sensor_model/min)" />
+    <param name="sensor_model/max" value="$(arg sensor_model/max)" />
 
     <remap from="cloud_in" to="$(arg cloud_in)" />
 

@@ -16,6 +16,14 @@
   <arg name="num_threads" default="1" />
   <!-- Resolution to downsample point cloud using Voxel Grid Filter.  Set to 0 for none -->
   <arg name="downsample_size" default="0.0" />
+  <!-- Secondary camera settings for a restricted view map, such as for an artifact camera -->
+  <arg name="build_camera_map" default="true" />
+  <arg name="publish_camera_map" default="true" />
+  <arg name="publish_camera_view" default="true" />
+  <arg name="camera_range" default="5.0" />
+  <!-- FOV must be < 180 degrees. Input 180.0 for full 360 coverage. -->
+  <arg name="camera_horizontal_fov" default="90.0" />
+  <arg name="camera_vertical_fov" default="60.0" />
   <!-- Whether to publish merged maps -->
   <arg name="publish_merged_binary" default="true" />
   <arg name="publish_merged_full" default="false" />
@@ -42,6 +50,13 @@
     <param name="sensor_model/max_range" value="$(arg max_range)" />
     <param name="num_threads" value="$(arg num_threads)" />
     <param name="downsample_size" value="$(arg downsample_size)" />
+
+    <param name="build_camera_map" value="$(arg build_camera_map)" />
+    <param name="publish_camera_map" value="$(arg publish_camera_map)" />
+    <param name="publish_camera_view" value="$(arg publish_camera_view)" />
+    <param name="camera_range" value="$(arg camera_range)" />
+    <param name="camera_horizontal_fov" value="$(arg camera_horizontal_fov)" />
+    <param name="camera_vertical_fov" value="$(arg camera_vertical_fov)" />
 
     <param name="publish_merged_binary" value="$(arg publish_merged_binary)" />
     <param name="publish_merged_full" value="$(arg publish_merged_full)" />

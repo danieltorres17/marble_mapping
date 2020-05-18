@@ -94,6 +94,7 @@ protected:
   void publishFullOctoMap(const ros::Time& rostime = ros::Time::now()) const;
   void publishMergedBinaryOctoMap(const ros::Time& rostime = ros::Time::now()) const;
   void publishMergedFullOctoMap(const ros::Time& rostime = ros::Time::now()) const;
+  void publishCameraOctoMap(const ros::Time& rostime = ros::Time::now()) const;
   virtual void publishAll(const ros::Time& rostime = ros::Time::now());
 
   /**
@@ -104,7 +105,7 @@ protected:
   * @param ground scan endpoints on the ground plane (only clear space)
   * @param nonground all other endpoints (clear up to occupied endpoint)
   */
-  virtual void insertScan(const tf::Point& sensorOrigin, const PCLPointCloud& ground, const PCLPointCloud& nonground);
+  virtual void insertScan(const tf::StampedTransform& sensorToWorldTf, const PCLPointCloud& ground, const PCLPointCloud& nonground);
 
   // Check the changes since last run to publish for sharing to other agents
   void updateDiff(const ros::TimerEvent& event);
@@ -123,9 +124,13 @@ protected:
   bool isSpeckleNode(const octomap::OcTreeKey& key) const;
 
   static std_msgs::ColorRGBA heightMapColor(double h);
+
+  void buildView(const tf::Matrix3x3& rotation, const octomap::point3d& position);
+  bool pointInsideView(octomap::point3d& point);
+
   ros::NodeHandle m_nh;
   ros::NodeHandle m_nh_private;
-  ros::Publisher  m_markerPub, m_binaryMapPub, m_fullMapPub, m_mergedBinaryMapPub, m_mergedFullMapPub, m_diffMapPub, m_diffsMapPub, m_pointCloudPub, m_fmarkerPub;
+  ros::Publisher  m_markerPub, m_binaryMapPub, m_fullMapPub, m_mergedBinaryMapPub, m_mergedFullMapPub, m_diffMapPub, m_diffsMapPub, m_cameraMapPub, m_cameraViewPub, m_pointCloudPub, m_fmarkerPub;
   ros::Subscriber m_neighborsSub;
   message_filters::Subscriber<sensor_msgs::PointCloud2>* m_pointCloudSub;
   tf::MessageFilter<sensor_msgs::PointCloud2>* m_tfPointCloudSub;
@@ -137,6 +142,7 @@ protected:
 
   OcTreeT* m_octree;
   OcTreeT* m_diff_tree;
+  OcTreeT* m_camera_tree;
   octomap::OcTreeStamped* m_merged_tree;
   std::vector<octomap::KeyRay> keyrays;
 
@@ -156,6 +162,8 @@ protected:
   bool m_publishPointCloud;
   bool m_publishMergedBinaryMap;
   bool m_publishMergedFullMap;
+  bool m_publishCameraMap;
+  bool m_publishCameraView;
 
   double m_res;
   double m_mres;
@@ -188,6 +196,12 @@ protected:
   double m_groundFilterPlaneDistance;
 
   bool m_initConfig;
+
+  // Secondary camera variables for restricted view map
+  bool m_buildCameraMap;
+  double camera_range, camera_h, camera_w;
+  Eigen::Vector4f pl_f, pl_t, pl_b, pl_r, pl_l;
+  visualization_msgs::Marker m_cameraView;
 };
 }
 

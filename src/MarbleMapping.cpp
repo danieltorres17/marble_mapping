@@ -134,6 +134,7 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   }
   omp_set_num_threads(m_numThreads);
 
+  // Merged OcTree, uses change detection to build diff tree
   m_merged_tree = new OcTreeStamped(m_mres);
   m_merged_tree->enableChangeDetection(true);
   m_merged_tree->setProbHit(probHit);
@@ -141,11 +142,19 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_merged_tree->setClampingThresMin(thresMin);
   m_merged_tree->setClampingThresMax(thresMax);
 
+  // Differences OcTree, for sharing between agents
   m_diff_tree = new OcTreeT(m_mres);
   m_diff_tree->setProbHit(probHit);
   m_diff_tree->setProbMiss(probMiss);
   m_diff_tree->setClampingThresMin(thresMin);
   m_diff_tree->setClampingThresMax(thresMax);
+
+  // Camera View OcTree, to show what has been seen by secondary sensor(s)
+  m_camera_tree = new OcTreeT(m_mres);
+  m_camera_tree->setProbHit(probHit);
+  m_camera_tree->setProbMiss(probMiss);
+  m_camera_tree->setClampingThresMin(thresMin);
+  m_camera_tree->setClampingThresMax(thresMax);
 
   num_diffs = 0;
   next_idx = 2;
@@ -169,6 +178,19 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_colorFree.b = b;
   m_colorFree.a = a;
 
+  // Get secondary camera view's height, width and range and whether to publish
+  double vfov_angle, hfov_angle;
+  m_nh_private.param("build_camera_map", m_buildCameraMap, false);
+  m_nh_private.param("publish_camera_map", m_publishCameraMap, false);
+  m_nh_private.param("publish_camera_view", m_publishCameraView, false);
+  m_nh_private.param("camera_range", camera_range, 5.0);
+  m_nh_private.param("camera_horizontal_fov", hfov_angle, 60.0);
+  m_nh_private.param("camera_vertical_fov", vfov_angle, 20.0);
+  double hfov_rad = hfov_angle * M_PI / 180.0;
+  double vfov_rad = vfov_angle * M_PI / 180.0;
+  camera_h = 2.0 * tan(vfov_rad / 2.0) * camera_range;
+  camera_w = 2.0 * tan(hfov_rad / 2.0) * camera_range;
+
   m_nh_private.param("publish_marker_array", m_publishMarkerArray, false);
   m_nh_private.param("publish_free_space", m_publishFreeSpace, false);
   m_nh_private.param("publish_point_cloud", m_publishPointCloud, false);
@@ -189,6 +211,9 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_diffMapPub = m_nh.advertise<Octomap>("map_diff", 1, m_latchedTopics);
   m_diffsMapPub = m_nh.advertise<marble_mapping::OctomapArray>("map_diffs", 1, m_latchedTopics);
 
+  if (m_publishCameraMap)
+    m_cameraMapPub = m_nh.advertise<Octomap>("camera_map", 1, m_latchedTopics);
+
   // Optional marker array and point cloud publishers
   if (m_publishMarkerArray)
     m_markerPub = m_nh.advertise<visualization_msgs::MarkerArray>("occupied_cells_vis_array", 1, m_latchedTopics);
@@ -196,6 +221,28 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_fmarkerPub = m_nh.advertise<visualization_msgs::MarkerArray>("free_cells_vis_array", 1, m_latchedTopics);
   if (m_publishPointCloud)
     m_pointCloudPub = m_nh.advertise<sensor_msgs::PointCloud2>("octomap_point_cloud_centers", 1, m_latchedTopics);
+
+  if (m_publishCameraView) {
+    m_cameraViewPub = m_nh.advertise<visualization_msgs::Marker>("camera_view", 1, m_latchedTopics);
+    m_cameraView.header.frame_id = "world";
+    m_cameraView.id = 0;
+    m_cameraView.scale.x = 1;
+    m_cameraView.scale.y = 1;
+    m_cameraView.scale.z = 1;
+    m_cameraView.pose.position.x = 0.0;
+    m_cameraView.pose.position.y = 0.0;
+    m_cameraView.pose.position.z = 0.0;
+    m_cameraView.pose.orientation.x = 0.0;
+    m_cameraView.pose.orientation.y = 0.0;
+    m_cameraView.pose.orientation.z = 0.0;
+    m_cameraView.pose.orientation.w = 1.0;
+    m_cameraView.color.a = 0.85;
+    m_cameraView.color.r = 0.0;
+    m_cameraView.color.g = 191.0/255.0;
+    m_cameraView.color.b = 1.0;
+    m_cameraView.type = 11;
+    m_cameraView.action = visualization_msgs::Marker::ADD;
+  }
 
   // Subscribers
   m_neighborsSub = m_nh.subscribe("neighbor_maps", 100, &MarbleMapping::neighborMapsCallback, this);
@@ -390,7 +437,7 @@ void MarbleMapping::insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr
   }
 
 
-  insertScan(sensorToWorldTf.getOrigin(), pc_ground, pc_nonground);
+  insertScan(sensorToWorldTf, pc_ground, pc_nonground);
 
   m_octree->prune();
   m_merged_tree->prune();
@@ -401,8 +448,12 @@ void MarbleMapping::insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr
   publishAll(cloud->header.stamp);
 }
 
-void MarbleMapping::insertScan(const tf::Point& sensorOriginTf, const PCLPointCloud& ground, const PCLPointCloud& nonground){
-  point3d sensorOrigin = pointTfToOctomap(sensorOriginTf);
+void MarbleMapping::insertScan(const tf::StampedTransform& sensorToWorldTf, const PCLPointCloud& ground, const PCLPointCloud& nonground){
+  // Get the rotation matrix and the position, and build camera view if enabled
+  tf::Matrix3x3 rotation = sensorToWorldTf.getBasis();
+  point3d sensorOrigin = pointTfToOctomap(sensorToWorldTf.getOrigin());
+  if (m_buildCameraMap)
+    buildView(rotation, sensorOrigin);
 
   // instead of direct scan insertion, compute update to filter ground:
   KeySet free_cells, occupied_cells;
@@ -485,18 +536,29 @@ void MarbleMapping::insertScan(const tf::Point& sensorOriginTf, const PCLPointCl
   // mark free cells only if not seen occupied in this cloud
   for(KeySet::iterator it = free_cells.begin(), end=free_cells.end(); it!= end; ++it){
     if (occupied_cells.find(*it) == occupied_cells.end()){
+      // Voxels are based on the main octree, so need the actual coordinate for other res trees
+      point3d point = m_octree->keyToCoord(*it);
       m_octree->updateNode(*it, false);
       // Update the merged map.  Using the coordinate allows for different resolutions
-      OcTreeNodeStamped *newNode = m_merged_tree->updateNode(m_octree->keyToCoord(*it), false);
+      OcTreeNodeStamped *newNode = m_merged_tree->updateNode(point, false);
       newNode->setTimestamp(1);
+      // Build the map of what the secondary sensor can see
+      if (m_buildCameraMap && pointInsideView(point)) {
+        m_camera_tree->updateNode(point, false);
+      }
     }
   }
 
   // now mark all occupied cells:
   for (KeySet::iterator it = occupied_cells.begin(), end=occupied_cells.end(); it!= end; it++) {
+    point3d point = m_octree->keyToCoord(*it);
     m_octree->updateNode(*it, true);
-    OcTreeNodeStamped *newNode = m_merged_tree->updateNode(m_octree->keyToCoord(*it), true);
+    OcTreeNodeStamped *newNode = m_merged_tree->updateNode(point, true);
     newNode->setTimestamp(1);
+    if (m_buildCameraMap && pointInsideView(point)) {
+      m_camera_tree->updateNode(point, true);
+    }
+
   }
 }
 
@@ -624,6 +686,8 @@ void MarbleMapping::publishAll(const ros::Time& rostime){
   bool publishPointCloud = m_publishPointCloud && (m_pointCloudPub.getNumSubscribers() > 0);
   bool publishMergedBinaryMap = m_publishMergedBinaryMap && (m_mergedBinaryMapPub.getNumSubscribers() > 0);
   bool publishMergedFullMap = m_publishMergedFullMap && (m_mergedFullMapPub.getNumSubscribers() > 0);
+  bool publishCameraMap = m_publishCameraMap && (m_cameraMapPub.getNumSubscribers() > 0);
+  bool publishCameraView = m_publishCameraView && (m_cameraViewPub.getNumSubscribers() > 0);
   bool publishBinaryMap = (m_binaryMapPub.getNumSubscribers() > 0);
   bool publishFullMap = (m_fullMapPub.getNumSubscribers() > 0);
 
@@ -781,6 +845,12 @@ void MarbleMapping::publishAll(const ros::Time& rostime){
   if (publishMergedFullMap)
     publishMergedFullOctoMap(rostime);
 
+  if (publishCameraMap)
+    publishCameraOctoMap(rostime);
+
+  if (publishCameraView)
+    m_cameraViewPub.publish(m_cameraView);
+
   double total_elapsed = (ros::WallTime::now() - startTime).toSec();
   ROS_DEBUG("Map publishing in MarbleMapping took %f sec", total_elapsed);
 
@@ -900,6 +970,19 @@ void MarbleMapping::publishMergedFullOctoMap(const ros::Time& rostime) const{
   if (octomap_msgs::fullMapToMsg(*m_merged_tree, map)) {
     map.id = "OcTree";
     m_mergedFullMapPub.publish(map);
+  } else
+    ROS_ERROR("Error serializing OctoMap");
+}
+
+void MarbleMapping::publishCameraOctoMap(const ros::Time& rostime) const{
+
+  Octomap map;
+  map.header.frame_id = m_worldFrameId;
+  map.header.stamp = rostime;
+
+  if (octomap_msgs::binaryMapToMsg(*m_camera_tree, map)) {
+    map.id = "OcTree";
+    m_cameraMapPub.publish(map);
   } else
     ROS_ERROR("Error serializing OctoMap");
 }
@@ -1136,5 +1219,89 @@ std_msgs::ColorRGBA MarbleMapping::heightMapColor(double h) {
   }
 
   return color;
+}
+
+void MarbleMapping::buildView(const tf::Matrix3x3& rotation, const octomap::point3d& position) {
+  // Build the planes that make up the camera field of view
+
+  // Vectors to define where the camera is looking
+  Eigen::Vector3f view(rotation[0][0], rotation[1][0], rotation[2][0]);
+  Eigen::Vector3f right(rotation[0][1], rotation[1][1], rotation[2][1]);
+  Eigen::Vector3f up(rotation[0][2], rotation[1][2], rotation[2][2]);
+  Eigen::Vector3f pos(position.x(), position.y(), position.z());
+
+  // Points defining corners of the view
+  Eigen::Vector3f fp_c(pos + view * camera_range);
+  Eigen::Vector3f fp_tl(fp_c + (up * camera_h / 2) + (right * camera_w / 2));
+  Eigen::Vector3f fp_tr(fp_c + (up * camera_h / 2) - (right * camera_w / 2));
+  Eigen::Vector3f fp_bl(fp_c - (up * camera_h / 2) + (right * camera_w / 2));
+  Eigen::Vector3f fp_br(fp_c - (up * camera_h / 2) - (right * camera_w / 2));
+
+  // Build the planes
+  pl_f.head<3>() = (fp_bl - fp_br).cross(fp_tr - fp_br);
+  pl_f(3) = -fp_c.dot(pl_f.head<3>());
+
+  Eigen::Vector3f a(fp_bl - pos);
+  Eigen::Vector3f b(fp_br - pos);
+  Eigen::Vector3f c(fp_tr - pos);
+  Eigen::Vector3f d(fp_tl - pos);
+
+  pl_r.head<3>() = b.cross(c);
+  pl_l.head<3>() = d.cross(a);
+  pl_t.head<3>() = c.cross(d);
+  pl_b.head<3>() = a.cross(b);
+
+  pl_r(3) = -pos.dot(pl_r.head<3>());
+  pl_l(3) = -pos.dot(pl_l.head<3>());
+  pl_t(3) = -pos.dot(pl_t.head<3>());
+  pl_b(3) = -pos.dot(pl_b.head<3>());
+
+  // Build the camera view polygon for visualization, if enabled
+  if (m_publishCameraView) {
+    geometry_msgs::Point camera;
+    camera.x = pos(0);
+    camera.y = pos(1);
+    camera.z = pos(2);
+    geometry_msgs::Point TL;
+    TL.x = fp_tl(0);
+    TL.y = fp_tl(1);
+    TL.z = fp_tl(2);
+    geometry_msgs::Point TR;
+    TR.x = fp_tr(0);
+    TR.y = fp_tr(1);
+    TR.z = fp_tr(2);
+    geometry_msgs::Point BL;
+    BL.x = fp_bl(0);
+    BL.y = fp_bl(1);
+    BL.z = fp_bl(2);
+    geometry_msgs::Point BR;
+    BR.x = fp_br(0);
+    BR.y = fp_br(1);
+    BR.z = fp_br(2);
+
+    m_cameraView.points.clear();
+    m_cameraView.points.push_back(camera);
+    m_cameraView.points.push_back(TL);
+    m_cameraView.points.push_back(BL);
+    m_cameraView.points.push_back(camera);
+    m_cameraView.points.push_back(TL);
+    m_cameraView.points.push_back(TR);
+    m_cameraView.points.push_back(camera);
+    m_cameraView.points.push_back(TR);
+    m_cameraView.points.push_back(BR);
+    m_cameraView.points.push_back(camera);
+    m_cameraView.points.push_back(BR);
+    m_cameraView.points.push_back(BL);
+  }
+}
+
+bool MarbleMapping::pointInsideView(octomap::point3d& point) {
+  // Find whether a given point lies inside the field of view of the camera
+  Eigen::Vector4f pt(point.x(), point.y(), point.z(), 1.0f);
+  return (pt.dot(pl_l) <= 0) &&
+         (pt.dot(pl_r) <= 0) &&
+         (pt.dot(pl_t) <= 0) &&
+         (pt.dot(pl_b) <= 0) &&
+         (pt.dot(pl_f) <= 0);
 }
 }

@@ -69,6 +69,9 @@ target_link_libraries(marble_mapping_node ${PROJECT_NAME} ${LINK_LIBS})
 add_library(marble_mapping_nodelet src/marble_mapping_nodelet.cpp)
 target_link_libraries(marble_mapping_nodelet ${PROJECT_NAME} ${LINK_LIBS})
 
+add_executable(compare_octomaps src/compare_octomaps.cpp)
+target_link_libraries(compare_octomaps ${PROJECT_NAME} ${LINK_LIBS})
+
 # install targets:
 install(TARGETS ${PROJECT_NAME}
   marble_mapping_node

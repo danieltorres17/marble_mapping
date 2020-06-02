@@ -120,8 +120,6 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_octree->setProbMiss(probMiss);
   m_octree->setClampingThresMin(thresMin);
   m_octree->setClampingThresMax(thresMax);
-  m_treeDepth = m_octree->getTreeDepth();
-  m_maxTreeDepth = m_treeDepth;
 
   #pragma omp parallel
   #pragma omp master
@@ -141,6 +139,8 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_merged_tree->setProbMiss(probMiss);
   m_merged_tree->setClampingThresMin(thresMin);
   m_merged_tree->setClampingThresMax(thresMax);
+  m_treeDepth = m_merged_tree->getTreeDepth();
+  m_maxTreeDepth = m_treeDepth;
 
   // Differences OcTree, for sharing between agents
   m_diff_tree = new OcTreeT(m_mres);
@@ -194,8 +194,12 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_nh_private.param("publish_marker_array", m_publishMarkerArray, false);
   m_nh_private.param("publish_free_space", m_publishFreeSpace, false);
   m_nh_private.param("publish_point_cloud", m_publishPointCloud, false);
+  m_nh_private.param("publish_point_cloud_diff", m_publishPointCloudDiff, false);
 
   m_nh_private.param("latch", m_latchedTopics, m_latchedTopics);
+
+  m_nh_private.param("remove_ceiling", m_removeCeiling, false);
+  m_nh_private.param("remove_ceiling_depth", m_removeCeilingDepth, 5);
 
   // Normal octomap format map publishers
   m_binaryMapPub = m_nh.advertise<Octomap>("octomap_binary", 1, m_latchedTopics);
@@ -216,11 +220,13 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
 
   // Optional marker array and point cloud publishers
   if (m_publishMarkerArray)
-    m_markerPub = m_nh.advertise<visualization_msgs::MarkerArray>("occupied_cells_vis_array", 1, m_latchedTopics);
+    m_markerPub = m_nh.advertise<visualization_msgs::MarkerArray>("merged_map_markers", 1, m_latchedTopics);
   if (m_publishFreeSpace)
-  m_fmarkerPub = m_nh.advertise<visualization_msgs::MarkerArray>("free_cells_vis_array", 1, m_latchedTopics);
+    m_fmarkerPub = m_nh.advertise<visualization_msgs::MarkerArray>("merged_map_free", 1, m_latchedTopics);
   if (m_publishPointCloud)
-    m_pointCloudPub = m_nh.advertise<sensor_msgs::PointCloud2>("octomap_point_cloud_centers", 1, m_latchedTopics);
+    m_pointCloudPub = m_nh.advertise<sensor_msgs::PointCloud2>("merged_map_pc", 1, m_latchedTopics);
+  if (m_publishPointCloudDiff)
+    m_pointCloudDiffPub = m_nh.advertise<sensor_msgs::PointCloud2>("pc_diff", 1, m_latchedTopics);
 
   if (m_publishCameraView) {
     m_cameraViewPub = m_nh.advertise<visualization_msgs::Marker>("camera_view", 1, m_latchedTopics);
@@ -336,11 +342,7 @@ void MarbleMapping::neighborMapsCallback(const marble_mapping::OctomapNeighborsC
   mergeNeighbors();
   m_merged_tree->prune();
 
-  if (m_publishMergedBinaryMap && m_mergedBinaryMapPub.getNumSubscribers() > 0)
-    publishMergedBinaryOctoMap(ros::Time::now());
-
-  if (m_publishMergedFullMap && m_mergedFullMapPub.getNumSubscribers() > 0)
-    publishMergedFullOctoMap(ros::Time::now());
+  publishAll();
 }
 
 void MarbleMapping::insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr& cloud){
@@ -568,15 +570,24 @@ void MarbleMapping::updateDiff(const ros::TimerEvent& event) {
   KeyBoolMap::const_iterator startPnt = m_merged_tree->changedKeysBegin();
   KeyBoolMap::const_iterator endPnt = m_merged_tree->changedKeysEnd();
 
+  PCLPointCloud pclDiffCloud;
+  size_t octomapSize = m_octree->size();
+
   m_diff_tree->clear();
 
   int num_nodes = 0;
   for (KeyBoolMap::const_iterator iter = startPnt; iter != endPnt; ++iter) {
     // Copy the value for each node
     OcTreeNodeStamped* node = m_merged_tree->search(iter->first);
-    if (node->getTimestamp() == 1) {
+    if ((node->getTimestamp() == 1) || (octomapSize == 0)) {
       m_diff_tree->setNodeValue(iter->first, node->getLogOdds());
       num_nodes++;
+    }
+
+    // Create a point cloud diff if enabled
+    if ((m_publishPointCloudDiff) && (node->getLogOdds() >= 0)) {
+      point3d point = m_merged_tree->keyToCoord(iter->first);
+      pclDiffCloud.push_back(PCLPoint(point.x(), point.y(), point.z()));
     }
   }
 
@@ -597,6 +608,15 @@ void MarbleMapping::updateDiff(const ros::TimerEvent& event) {
     mapdiffs.octomaps.push_back(msg);
     mapdiffs.num_octomaps = num_diffs;
     m_diffsMapPub.publish(mapdiffs);
+
+    // Publish the diff point cloud if enabled
+    if (m_publishPointCloudDiff) {
+      sensor_msgs::PointCloud2 cloud;
+      pcl::toROSMsg (pclDiffCloud, cloud);
+      cloud.header.frame_id = m_worldFrameId;
+      cloud.header.stamp = ros::Time().now();
+      m_pointCloudDiffPub.publish(cloud);
+    }
 
     m_merged_tree->resetChangeDetection();
   }
@@ -653,7 +673,7 @@ void MarbleMapping::mergeNeighbors() {
               // If there's already a node in the merged map, but it's from another neighbor,
               // or it's been previously merged, merge the value, and set timestamp to merged
               // Update based on occupancy seems to work better than getLogOdds
-              if (it->getOccupancy() > 0.5)
+              if (it->getLogOdds() >= 0)
                 m_merged_tree->updateNode(nodeKey, true);
               else
                 m_merged_tree->updateNode(nodeKey, false);
@@ -674,9 +694,8 @@ void MarbleMapping::mergeNeighbors() {
 
 void MarbleMapping::publishAll(const ros::Time& rostime){
   ros::WallTime startTime = ros::WallTime::now();
-  size_t octomapSize = m_octree->size();
   // TODO: estimate num occ. voxels for size of arrays (reserve)
-  if (octomapSize <= 1){
+  if ((m_octree->size() <= 1) && (m_merged_tree->size() <= 1)) {
     ROS_WARN("Nothing to publish, octree is empty");
     return;
   }
@@ -704,13 +723,17 @@ void MarbleMapping::publishAll(const ros::Time& rostime){
     occupiedNodesVis.markers.resize(m_treeDepth+1);
 
     // now, traverse all leafs in the tree:
-    for (OcTreeT::iterator it = m_octree->begin(m_maxTreeDepth),
-        end = m_octree->end(); it != end; ++it) {
-      if (m_octree->isNodeOccupied(*it)) {
+    for (OcTreeStamped::iterator it = m_merged_tree->begin(m_maxTreeDepth),
+        end = m_merged_tree->end(); it != end; ++it) {
+      if (m_merged_tree->isNodeOccupied(*it)) {
+        // Skip this node if remove ceiling is enabled
+        if (m_removeCeiling && isCeiling(it.getKey())) {
+          continue;
+        }
+
         double z = it.getZ();
         double half_size = it.getSize() / 2.0;
-        if (z + half_size > m_occupancyMinZ && z - half_size < m_occupancyMaxZ)
-        {
+        if (z + half_size > m_occupancyMinZ && z - half_size < m_occupancyMaxZ) {
           double size = it.getSize();
           double x = it.getX();
           double y = it.getY();
@@ -733,8 +756,8 @@ void MarbleMapping::publishAll(const ros::Time& rostime){
 
             occupiedNodesVis.markers[idx].points.push_back(cubeCenter);
             double minX, minY, minZ, maxX, maxY, maxZ;
-            m_octree->getMetricMin(minX, minY, minZ);
-            m_octree->getMetricMax(maxX, maxY, maxZ);
+            m_merged_tree->getMetricMin(minX, minY, minZ);
+            m_merged_tree->getMetricMax(maxX, maxY, maxZ);
 
             double h = (1.0 - std::min(std::max((cubeCenter.z-minZ)/ (maxZ - minZ), 0.0), 1.0)) *m_colorFactor;
             occupiedNodesVis.markers[idx].colors.push_back(heightMapColor(h));
@@ -747,25 +770,23 @@ void MarbleMapping::publishAll(const ros::Time& rostime){
 
         }
       } else { // node not occupied => mark as free in 2D map if unknown so far
-        double z = it.getZ();
-        double half_size = it.getSize() / 2.0;
-        if (z + half_size > m_occupancyMinZ && z - half_size < m_occupancyMaxZ) {
-          if (m_publishFreeSpace) {
+        if (publishFreeMarkerArray) {
+          double z = it.getZ();
+          double half_size = it.getSize() / 2.0;
+          if (z + half_size > m_occupancyMinZ && z - half_size < m_occupancyMaxZ) {
             double x = it.getX();
             double y = it.getY();
 
             //create marker for free space:
-            if (publishFreeMarkerArray) {
-              unsigned idx = it.getDepth();
-              assert(idx < freeNodesVis.markers.size());
+            unsigned idx = it.getDepth();
+            assert(idx < freeNodesVis.markers.size());
 
-              geometry_msgs::Point cubeCenter;
-              cubeCenter.x = x;
-              cubeCenter.y = y;
-              cubeCenter.z = z;
+            geometry_msgs::Point cubeCenter;
+            cubeCenter.x = x;
+            cubeCenter.y = y;
+            cubeCenter.z = z;
 
-              freeNodesVis.markers[idx].points.push_back(cubeCenter);
-            }
+            freeNodesVis.markers[idx].points.push_back(cubeCenter);
           }
         }
       }
@@ -775,7 +796,7 @@ void MarbleMapping::publishAll(const ros::Time& rostime){
   // finish MarkerArray:
   if (publishMarkerArray){
     for (unsigned i= 0; i < occupiedNodesVis.markers.size(); ++i){
-      double size = m_octree->getNodeSize(i);
+      double size = m_merged_tree->getNodeSize(i);
 
       occupiedNodesVis.markers[i].header.frame_id = m_worldFrameId;
       occupiedNodesVis.markers[i].header.stamp = rostime;
@@ -801,7 +822,7 @@ void MarbleMapping::publishAll(const ros::Time& rostime){
   // finish FreeMarkerArray:
   if (publishFreeMarkerArray){
     for (unsigned i= 0; i < freeNodesVis.markers.size(); ++i){
-      double size = m_octree->getNodeSize(i);
+      double size = m_merged_tree->getNodeSize(i);
 
       freeNodesVis.markers[i].header.frame_id = m_worldFrameId;
       freeNodesVis.markers[i].header.stamp = rostime;
@@ -1103,8 +1124,8 @@ bool MarbleMapping::isSpeckleNode(const OcTreeKey&nKey) const {
     for (key[1] = nKey[1] - 1; !neighborFound && key[1] <= nKey[1] + 1; ++key[1]){
       for (key[0] = nKey[0] - 1; !neighborFound && key[0] <= nKey[0] + 1; ++key[0]){
         if (key != nKey){
-          OcTreeNode* node = m_octree->search(key);
-          if (node && m_octree->isNodeOccupied(node)){
+          OcTreeNode* node = m_merged_tree->search(key);
+          if (node && m_merged_tree->isNodeOccupied(node)){
             // we have a neighbor => break!
             neighborFound = true;
           }
@@ -1303,5 +1324,55 @@ bool MarbleMapping::pointInsideView(octomap::point3d& point) {
          (pt.dot(pl_t) <= 0) &&
          (pt.dot(pl_b) <= 0) &&
          (pt.dot(pl_f) <= 0);
+}
+
+bool MarbleMapping::isCeiling(const octomap::OcTreeKey& curKey) {
+  // Determine whether a node is part of the ceiling and should be removed
+  bool skipNode = false;
+  for (int i = 1; i < m_removeCeilingDepth; i++) {
+    // Look at i nodes above the current node to see if does NOT exist
+    OcTreeKey checkKey = curKey;
+    checkKey.k[2] = curKey.k[2] + i;
+    OcTreeNodeStamped* aboveNode = m_merged_tree->search(checkKey);
+    if (!aboveNode) {
+      for (int j = 1; j < m_removeCeilingDepth; j++) {
+        // If not, look at j nodes below the current node to see if it's free
+        checkKey.k[2] = curKey.k[2] - j;
+        OcTreeNodeStamped* belowNode = m_merged_tree->search(checkKey);
+        if (belowNode && belowNode->getLogOdds() < 0) {
+          // Found a free node below, now check if it's surrounded by free nodes as well
+          checkKey.k[0] = curKey.k[0] + 1;
+          belowNode = m_merged_tree->search(checkKey);
+          if (!(belowNode && belowNode->getLogOdds() < 0))
+            continue;
+
+          checkKey.k[0] = curKey.k[0] - 1;
+          belowNode = m_merged_tree->search(checkKey);
+          if (!(belowNode && belowNode->getLogOdds() < 0))
+            continue;
+
+          checkKey.k[1] = curKey.k[1] + 1;
+          belowNode = m_merged_tree->search(checkKey);
+          if (!(belowNode && belowNode->getLogOdds() < 0))
+            continue;
+
+          checkKey.k[1] = curKey.k[1] - 1;
+          belowNode = m_merged_tree->search(checkKey);
+          if (!(belowNode && belowNode->getLogOdds() < 0))
+            continue;
+
+          // Made it this far, then all the nodes below are free, so mark and break the loop
+          skipNode = true;
+          break;
+        }
+      }
+
+      // If we found a node below surrounded by free nodes, we can stop searching
+      if (skipNode)
+        break;
+    }
+  }
+
+  return skipNode;
 }
 }

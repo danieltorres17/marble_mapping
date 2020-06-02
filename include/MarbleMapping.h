@@ -127,10 +127,11 @@ protected:
 
   void buildView(const tf::Matrix3x3& rotation, const octomap::point3d& position);
   bool pointInsideView(octomap::point3d& point);
+  bool isCeiling(const octomap::OcTreeKey& curKey);
 
   ros::NodeHandle m_nh;
   ros::NodeHandle m_nh_private;
-  ros::Publisher  m_markerPub, m_binaryMapPub, m_fullMapPub, m_mergedBinaryMapPub, m_mergedFullMapPub, m_diffMapPub, m_diffsMapPub, m_cameraMapPub, m_cameraViewPub, m_pointCloudPub, m_fmarkerPub;
+  ros::Publisher  m_markerPub, m_binaryMapPub, m_fullMapPub, m_mergedBinaryMapPub, m_mergedFullMapPub, m_diffMapPub, m_diffsMapPub, m_cameraMapPub, m_cameraViewPub, m_pointCloudPub, m_pointCloudDiffPub, m_fmarkerPub;
   ros::Subscriber m_neighborsSub;
   message_filters::Subscriber<sensor_msgs::PointCloud2>* m_pointCloudSub;
   tf::MessageFilter<sensor_msgs::PointCloud2>* m_tfPointCloudSub;
@@ -160,10 +161,14 @@ protected:
   bool m_publishMarkerArray;
   bool m_publishFreeSpace;
   bool m_publishPointCloud;
+  bool m_publishPointCloudDiff;
   bool m_publishMergedBinaryMap;
   bool m_publishMergedFullMap;
   bool m_publishCameraMap;
   bool m_publishCameraView;
+
+  bool m_removeCeiling;
+  int m_removeCeilingDepth;
 
   double m_res;
   double m_mres;

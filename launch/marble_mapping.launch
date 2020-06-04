@@ -27,6 +27,8 @@
   <!-- Whether to publish merged maps -->
   <arg name="publish_merged_binary" default="true" />
   <arg name="publish_merged_full" default="false" />
+  <!-- How often to publish optional (marker array, point cloud) maps -->
+  <arg name="publish_duration" default="0.2" />
   <!-- Whether to publish the marker arrays and point cloud -->
   <arg name="publish_marker_array" default="true" />
   <arg name="publish_free_space" default="false" />
@@ -34,7 +36,7 @@
   <arg name="publish_point_cloud_diff" default="false" />
   <!-- Whether to remove ceiling from marker arrays and point clouds, and how deep to check -->
   <arg name="remove_ceiling" default="true" />
-  <arg name="remove_ceiling_depth" default="5" />
+  <arg name="remove_ceiling_depth" default="4" />
   <!-- Number of new nodes required to create a new diff -->
   <arg name="diff_threshold" default="1000" />
   <!-- How many seconds to publish and reset diff map -->
@@ -65,6 +67,7 @@
     <param name="publish_merged_binary" value="$(arg publish_merged_binary)" />
     <param name="publish_merged_full" value="$(arg publish_merged_full)" />
 
+    <param name="publish_duration" value="$(arg publish_duration)" />
     <param name="publish_marker_array" value="$(arg publish_marker_array)" />
     <param name="publish_free_space" value="$(arg publish_free_space)" />
     <param name="publish_point_cloud" value="$(arg publish_point_cloud)" />

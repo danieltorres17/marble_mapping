@@ -191,6 +191,7 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   camera_h = 2.0 * tan(vfov_rad / 2.0) * camera_range;
   camera_w = 2.0 * tan(hfov_rad / 2.0) * camera_range;
 
+  m_nh_private.param("publish_duration", pub_duration, 0.2);
   m_nh_private.param("publish_marker_array", m_publishMarkerArray, false);
   m_nh_private.param("publish_free_space", m_publishFreeSpace, false);
   m_nh_private.param("publish_point_cloud", m_publishPointCloud, false);
@@ -199,7 +200,7 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_nh_private.param("latch", m_latchedTopics, m_latchedTopics);
 
   m_nh_private.param("remove_ceiling", m_removeCeiling, false);
-  m_nh_private.param("remove_ceiling_depth", m_removeCeilingDepth, 5);
+  m_nh_private.param("remove_ceiling_depth", m_removeCeilingDepth, 4);
 
   // Normal octomap format map publishers
   m_binaryMapPub = m_nh.advertise<Octomap>("octomap_binary", 1, m_latchedTopics);
@@ -263,6 +264,15 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
 
   // Timer for updating the local map diff that will be broadcast
   diff_timer = m_nh.createTimer(ros::Duration(diff_duration), &MarbleMapping::updateDiff, this);
+
+  // Timer to publish the optional maps, on a separate thread
+  if (m_publishMarkerArray || m_publishFreeSpace || m_publishPointCloud) {
+    ros::TimerOptions ops;
+    ops.period = ros::Duration(pub_duration);
+    ops.callback = boost::bind(&MarbleMapping::publishOptionalMaps, this, _1);
+    ops.callback_queue = &pub_queue;
+    pub_timer = m_nh.createTimer(ops);
+  }
 
   dynamic_reconfigure::Server<MarbleMappingConfig>::CallbackType f;
   f = boost::bind(&MarbleMapping::reconfigureCallback, this, _1, _2);
@@ -330,7 +340,7 @@ bool MarbleMapping::openFile(const std::string& filename){
   m_maxTreeDepth = m_treeDepth;
   m_res = m_octree->getResolution();
 
-  publishAll();
+  publishOctoMaps();
 
   return true;
 
@@ -342,7 +352,7 @@ void MarbleMapping::neighborMapsCallback(const marble_mapping::OctomapNeighborsC
   mergeNeighbors();
   m_merged_tree->prune();
 
-  publishAll();
+  publishOctoMaps();
 }
 
 void MarbleMapping::insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr& cloud){
@@ -447,7 +457,7 @@ void MarbleMapping::insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr
   double total_elapsed = (ros::WallTime::now() - startTime).toSec();
   ROS_DEBUG("Pointcloud insertion in MarbleMapping done (%zu+%zu pts (ground/nonground), %f sec)", pc_ground.size(), pc_nonground.size(), total_elapsed);
 
-  publishAll(cloud->header.stamp);
+  publishOctoMaps(cloud->header.stamp);
 }
 
 void MarbleMapping::insertScan(const tf::StampedTransform& sensorToWorldTf, const PCLPointCloud& ground, const PCLPointCloud& nonground){
@@ -692,23 +702,17 @@ void MarbleMapping::mergeNeighbors() {
   }
 }
 
-void MarbleMapping::publishAll(const ros::Time& rostime){
+void MarbleMapping::publishOptionalMaps(const ros::TimerEvent& event) {
+  // Publish optional maps such as marker arrays.  Performed in separate thread.
   ros::WallTime startTime = ros::WallTime::now();
-  // TODO: estimate num occ. voxels for size of arrays (reserve)
+  ros::Time rostime = ros::Time::now();
   if ((m_octree->size() <= 1) && (m_merged_tree->size() <= 1)) {
-    ROS_WARN("Nothing to publish, octree is empty");
     return;
   }
 
   bool publishFreeMarkerArray = m_publishFreeSpace && (m_fmarkerPub.getNumSubscribers() > 0);
   bool publishMarkerArray = m_publishMarkerArray && (m_markerPub.getNumSubscribers() > 0);
   bool publishPointCloud = m_publishPointCloud && (m_pointCloudPub.getNumSubscribers() > 0);
-  bool publishMergedBinaryMap = m_publishMergedBinaryMap && (m_mergedBinaryMapPub.getNumSubscribers() > 0);
-  bool publishMergedFullMap = m_publishMergedFullMap && (m_mergedFullMapPub.getNumSubscribers() > 0);
-  bool publishCameraMap = m_publishCameraMap && (m_cameraMapPub.getNumSubscribers() > 0);
-  bool publishCameraView = m_publishCameraView && (m_cameraViewPub.getNumSubscribers() > 0);
-  bool publishBinaryMap = (m_binaryMapPub.getNumSubscribers() > 0);
-  bool publishFullMap = (m_fullMapPub.getNumSubscribers() > 0);
 
   // init markers:
   visualization_msgs::MarkerArray freeNodesVis, occupiedNodesVis;
@@ -818,7 +822,6 @@ void MarbleMapping::publishAll(const ros::Time& rostime){
     m_markerPub.publish(occupiedNodesVis);
   }
 
-
   // finish FreeMarkerArray:
   if (publishFreeMarkerArray){
     for (unsigned i= 0; i < freeNodesVis.markers.size(); ++i){
@@ -844,7 +847,6 @@ void MarbleMapping::publishAll(const ros::Time& rostime){
     m_fmarkerPub.publish(freeNodesVis);
   }
 
-
   // finish pointcloud:
   if (publishPointCloud){
     sensor_msgs::PointCloud2 cloud;
@@ -853,6 +855,24 @@ void MarbleMapping::publishAll(const ros::Time& rostime){
     cloud.header.stamp = rostime;
     m_pointCloudPub.publish(cloud);
   }
+
+  double total_elapsed = (ros::WallTime::now() - startTime).toSec();
+  ROS_DEBUG("Optional map publishing in MarbleMapping took %f sec", total_elapsed);
+}
+
+void MarbleMapping::publishOctoMaps(const ros::Time& rostime) {
+  ros::WallTime startTime = ros::WallTime::now();
+  if ((m_octree->size() <= 1) && (m_merged_tree->size() <= 1)) {
+    ROS_WARN("Nothing to publish, octree is empty");
+    return;
+  }
+
+  bool publishMergedBinaryMap = m_publishMergedBinaryMap && (m_mergedBinaryMapPub.getNumSubscribers() > 0);
+  bool publishMergedFullMap = m_publishMergedFullMap && (m_mergedFullMapPub.getNumSubscribers() > 0);
+  bool publishCameraMap = m_publishCameraMap && (m_cameraMapPub.getNumSubscribers() > 0);
+  bool publishCameraView = m_publishCameraView && (m_cameraViewPub.getNumSubscribers() > 0);
+  bool publishBinaryMap = (m_binaryMapPub.getNumSubscribers() > 0);
+  bool publishFullMap = (m_fullMapPub.getNumSubscribers() > 0);
 
   if (publishBinaryMap)
     publishBinaryOctoMap(rostime);
@@ -874,9 +894,7 @@ void MarbleMapping::publishAll(const ros::Time& rostime){
 
   double total_elapsed = (ros::WallTime::now() - startTime).toSec();
   ROS_DEBUG("Map publishing in MarbleMapping took %f sec", total_elapsed);
-
 }
-
 
 bool MarbleMapping::octomapBinarySrv(OctomapSrv::Request  &req,
                                     OctomapSrv::Response &res)
@@ -913,7 +931,7 @@ bool MarbleMapping::resetSrv(std_srvs::Empty::Request& req, std_srvs::Empty::Res
   ros::Time rostime = ros::Time::now();
   m_octree->clear();
   ROS_INFO("Cleared octomap");
-  publishAll(rostime);
+  publishOctoMaps(rostime);
 
   publishBinaryOctoMap(rostime);
   for (unsigned i= 0; i < occupiedNodesVis.markers.size(); ++i){
@@ -1190,7 +1208,7 @@ void MarbleMapping::reconfigureCallback(marble_mapping::MarbleMappingConfig& con
       m_octree->setProbMiss(config.sensor_model_miss);
 	}
   }
-  publishAll();
+  publishOctoMaps();
 }
 
 std_msgs::ColorRGBA MarbleMapping::heightMapColor(double h) {
@@ -1329,13 +1347,13 @@ bool MarbleMapping::pointInsideView(octomap::point3d& point) {
 bool MarbleMapping::isCeiling(const octomap::OcTreeKey& curKey) {
   // Determine whether a node is part of the ceiling and should be removed
   bool skipNode = false;
-  for (int i = 1; i < m_removeCeilingDepth; i++) {
+  for (int i = 1; i <= m_removeCeilingDepth; i++) {
     // Look at i nodes above the current node to see if does NOT exist
     OcTreeKey checkKey = curKey;
     checkKey.k[2] = curKey.k[2] + i;
     OcTreeNodeStamped* aboveNode = m_merged_tree->search(checkKey);
     if (!aboveNode) {
-      for (int j = 1; j < m_removeCeilingDepth; j++) {
+      for (int j = 1; j <= m_removeCeilingDepth; j++) {
         // If not, look at j nodes below the current node to see if it's free
         checkKey.k[2] = curKey.k[2] - j;
         OcTreeNodeStamped* belowNode = m_merged_tree->search(checkKey);

@@ -77,6 +77,7 @@ public:
   typedef pcl::PointCloud<pcl::PointXYZ> PCLPointCloud;
   typedef octomap::OcTree OcTreeT;
   typedef octomap_msgs::GetOctomap OctomapSrv;
+  ros::CallbackQueue pub_queue;
 
   MarbleMapping(const ros::NodeHandle private_nh_ = ros::NodeHandle("~"), const ros::NodeHandle &nh_ = ros::NodeHandle());
   virtual ~MarbleMapping();
@@ -95,7 +96,8 @@ protected:
   void publishMergedBinaryOctoMap(const ros::Time& rostime = ros::Time::now()) const;
   void publishMergedFullOctoMap(const ros::Time& rostime = ros::Time::now()) const;
   void publishCameraOctoMap(const ros::Time& rostime = ros::Time::now()) const;
-  virtual void publishAll(const ros::Time& rostime = ros::Time::now());
+  void publishOctoMaps(const ros::Time& rostime = ros::Time::now());
+  void publishOptionalMaps(const ros::TimerEvent& event);
 
   /**
   * @brief update occupancy map with a scan labeled as ground and nonground.
@@ -137,6 +139,7 @@ protected:
   tf::MessageFilter<sensor_msgs::PointCloud2>* m_tfPointCloudSub;
   ros::ServiceServer m_octomapBinaryService, m_octomapFullService, m_resetService;
   ros::Timer diff_timer;
+  ros::Timer pub_timer;
   tf::TransformListener m_tfListener;
   boost::recursive_mutex m_config_mutex;
   dynamic_reconfigure::Server<MarbleMappingConfig> m_reconfigureServer;
@@ -157,6 +160,7 @@ protected:
   std_msgs::ColorRGBA m_colorFree;
   double m_colorFactor;
 
+  double pub_duration;
   bool m_latchedTopics;
   bool m_publishMarkerArray;
   bool m_publishFreeSpace;

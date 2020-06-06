@@ -27,8 +27,9 @@
   <!-- Whether to publish merged maps -->
   <arg name="publish_merged_binary" default="true" />
   <arg name="publish_merged_full" default="false" />
-  <!-- How often to publish optional (marker array, point cloud) maps -->
-  <arg name="publish_duration" default="0.2" />
+  <!-- How often to publish octomaps and optional maps (marker array, point cloud) -->
+  <arg name="publish_duration" default="0.1" />
+  <arg name="publish_optional_duration" default="0.2" />
   <!-- Whether to publish the marker arrays and point cloud -->
   <arg name="publish_marker_array" default="true" />
   <arg name="publish_free_space" default="false" />
@@ -68,6 +69,7 @@
     <param name="publish_merged_full" value="$(arg publish_merged_full)" />
 
     <param name="publish_duration" value="$(arg publish_duration)" />
+    <param name="publish_optional_duration" value="$(arg publish_optional_duration)" />
     <param name="publish_marker_array" value="$(arg publish_marker_array)" />
     <param name="publish_free_space" value="$(arg publish_free_space)" />
     <param name="publish_point_cloud" value="$(arg publish_point_cloud)" />

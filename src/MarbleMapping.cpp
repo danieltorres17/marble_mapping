@@ -100,6 +100,7 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_nh_private.param("sensor_model/miss", probMiss, 0.4);
   m_nh_private.param("sensor_model/min", thresMin, 0.12);
   m_nh_private.param("sensor_model/max", thresMax, 0.97);
+  m_nh_private.param("publish_duration", pub_duration, 0.1);
   m_nh_private.param("publish_merged_binary", m_publishMergedBinaryMap, true);
   m_nh_private.param("publish_merged_full", m_publishMergedFullMap, false);
 
@@ -191,7 +192,7 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   camera_h = 2.0 * tan(vfov_rad / 2.0) * camera_range;
   camera_w = 2.0 * tan(hfov_rad / 2.0) * camera_range;
 
-  m_nh_private.param("publish_duration", pub_duration, 0.2);
+  m_nh_private.param("publish_optional_duration", pub_opt_duration, 0.2);
   m_nh_private.param("publish_marker_array", m_publishMarkerArray, false);
   m_nh_private.param("publish_free_space", m_publishFreeSpace, false);
   m_nh_private.param("publish_point_cloud", m_publishPointCloud, false);
@@ -264,14 +265,15 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
 
   // Timer for updating the local map diff that will be broadcast
   diff_timer = m_nh.createTimer(ros::Duration(diff_duration), &MarbleMapping::updateDiff, this);
-
+  // Timer for publishing the OctoMaps
+  pub_timer = m_nh.createTimer(ros::Duration(pub_duration), &MarbleMapping::publishOctoMaps, this);
   // Timer to publish the optional maps, on a separate thread
   if (m_publishMarkerArray || m_publishFreeSpace || m_publishPointCloud) {
     ros::TimerOptions ops;
-    ops.period = ros::Duration(pub_duration);
+    ops.period = ros::Duration(pub_opt_duration);
     ops.callback = boost::bind(&MarbleMapping::publishOptionalMaps, this, _1);
     ops.callback_queue = &pub_queue;
-    pub_timer = m_nh.createTimer(ops);
+    pub_opt_timer = m_nh.createTimer(ops);
   }
 
   dynamic_reconfigure::Server<MarbleMappingConfig>::CallbackType f;
@@ -340,8 +342,6 @@ bool MarbleMapping::openFile(const std::string& filename){
   m_maxTreeDepth = m_treeDepth;
   m_res = m_octree->getResolution();
 
-  publishOctoMaps();
-
   return true;
 
 }
@@ -351,8 +351,6 @@ void MarbleMapping::neighborMapsCallback(const marble_mapping::OctomapNeighborsC
   // Better to put this somewhere else, but the callback should be infrequent enough this is ok
   mergeNeighbors();
   m_merged_tree->prune();
-
-  publishOctoMaps();
 }
 
 void MarbleMapping::insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr& cloud){
@@ -456,8 +454,6 @@ void MarbleMapping::insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr
 
   double total_elapsed = (ros::WallTime::now() - startTime).toSec();
   ROS_DEBUG("Pointcloud insertion in MarbleMapping done (%zu+%zu pts (ground/nonground), %f sec)", pc_ground.size(), pc_nonground.size(), total_elapsed);
-
-  publishOctoMaps(cloud->header.stamp);
 }
 
 void MarbleMapping::insertScan(const tf::StampedTransform& sensorToWorldTf, const PCLPointCloud& ground, const PCLPointCloud& nonground){
@@ -860,10 +856,10 @@ void MarbleMapping::publishOptionalMaps(const ros::TimerEvent& event) {
   ROS_DEBUG("Optional map publishing in MarbleMapping took %f sec", total_elapsed);
 }
 
-void MarbleMapping::publishOctoMaps(const ros::Time& rostime) {
+void MarbleMapping::publishOctoMaps(const ros::TimerEvent& event) {
   ros::WallTime startTime = ros::WallTime::now();
+  ros::Time rostime = ros::Time::now();
   if ((m_octree->size() <= 1) && (m_merged_tree->size() <= 1)) {
-    ROS_WARN("Nothing to publish, octree is empty");
     return;
   }
 
@@ -931,7 +927,6 @@ bool MarbleMapping::resetSrv(std_srvs::Empty::Request& req, std_srvs::Empty::Res
   ros::Time rostime = ros::Time::now();
   m_octree->clear();
   ROS_INFO("Cleared octomap");
-  publishOctoMaps(rostime);
 
   publishBinaryOctoMap(rostime);
   for (unsigned i= 0; i < occupiedNodesVis.markers.size(); ++i){
@@ -1208,7 +1203,6 @@ void MarbleMapping::reconfigureCallback(marble_mapping::MarbleMappingConfig& con
       m_octree->setProbMiss(config.sensor_model_miss);
 	}
   }
-  publishOctoMaps();
 }
 
 std_msgs::ColorRGBA MarbleMapping::heightMapColor(double h) {

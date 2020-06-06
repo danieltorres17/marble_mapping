@@ -96,7 +96,7 @@ protected:
   void publishMergedBinaryOctoMap(const ros::Time& rostime = ros::Time::now()) const;
   void publishMergedFullOctoMap(const ros::Time& rostime = ros::Time::now()) const;
   void publishCameraOctoMap(const ros::Time& rostime = ros::Time::now()) const;
-  void publishOctoMaps(const ros::Time& rostime = ros::Time::now());
+  void publishOctoMaps(const ros::TimerEvent& event);
   void publishOptionalMaps(const ros::TimerEvent& event);
 
   /**
@@ -140,6 +140,7 @@ protected:
   ros::ServiceServer m_octomapBinaryService, m_octomapFullService, m_resetService;
   ros::Timer diff_timer;
   ros::Timer pub_timer;
+  ros::Timer pub_opt_timer;
   tf::TransformListener m_tfListener;
   boost::recursive_mutex m_config_mutex;
   dynamic_reconfigure::Server<MarbleMappingConfig> m_reconfigureServer;
@@ -161,6 +162,7 @@ protected:
   double m_colorFactor;
 
   double pub_duration;
+  double pub_opt_duration;
   bool m_latchedTopics;
   bool m_publishMarkerArray;
   bool m_publishFreeSpace;

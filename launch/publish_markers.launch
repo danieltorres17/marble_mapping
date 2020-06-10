@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<launch>
+  <!-- Convert an OctoMap published on the given topic to markers and/or point clouds
+       with optional ceiling removal.  Particularly useful for bag files. -->
+
+  <!-- Resolution of the input map -->
+  <arg name="merged_resolution" default="0.2" />
+  <!-- Fixed map frame (set to 'map' if SLAM or localization running!) -->
+  <arg name="frame_id" default="world" />
+  <!-- Input type: 0=none, 1=pointcloud, 2=octomap -->
+  <arg name="input" default="2" />
+  <!-- Data source to integrate (OctoMap) -->
+  <arg name="cloud_in" default="merged_map" />
+  <!-- Topic prefix to output to, ie merged_map outputs to merged_map_markers, etc -->
+  <arg name="prefix" default="merged_map" />
+  <!-- How often to publish these maps (marker array, point cloud) -->
+  <arg name="publish_optional_duration" default="0.2" />
+  <!-- Whether to publish the marker arrays and point cloud -->
+  <arg name="publish_marker_array" default="true" />
+  <arg name="publish_free_space" default="false" />
+  <arg name="publish_point_cloud" default="false" />
+  <!-- Whether to remove ceiling from marker arrays and point clouds, and how deep to check -->
+  <arg name="remove_ceiling" default="true" />
+  <arg name="remove_ceiling_depth" default="4" />
+
+  <node pkg="marble_mapping" type="marble_mapping_node" name="publish_markers" output="screen">
+    <param name="merged_resolution" value="$(arg merged_resolution)" />
+    <param name="frame_id" type="string" value="$(arg frame_id)" />
+    <param name="input" value="$(arg input)" />
+
+    <param name="publish_optional_duration" value="$(arg publish_optional_duration)" />
+    <param name="publish_marker_array" value="$(arg publish_marker_array)" />
+    <param name="publish_free_space" value="$(arg publish_free_space)" />
+    <param name="publish_point_cloud" value="$(arg publish_point_cloud)" />
+
+    <param name="remove_ceiling" value="$(arg remove_ceiling)" />
+    <param name="remove_ceiling_depth" value="$(arg remove_ceiling_depth)" />
+
+    <remap from="cloud_in" to="$(arg cloud_in)" />
+    <remap from="merged_map_markers" to="$(arg prefix)_markers" />
+    <remap from="merged_map_free" to="$(arg prefix)_free" />
+    <remap from="merged_map_pc" to="$(arg prefix)_pc" />
+  </node>
+</launch>

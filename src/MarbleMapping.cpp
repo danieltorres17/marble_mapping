@@ -68,6 +68,7 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
 {
   double probHit, probMiss, thresMin, thresMax;
 
+  m_nh_private.param("input", m_input, 1);
   m_nh_private.param("frame_id", m_worldFrameId, m_worldFrameId);
   m_nh_private.param("base_frame_id", m_baseFrameId, m_baseFrameId);
   m_nh_private.param("color_factor", m_colorFactor, m_colorFactor);
@@ -101,9 +102,13 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_nh_private.param("sensor_model/min", thresMin, 0.12);
   m_nh_private.param("sensor_model/max", thresMax, 0.97);
   m_nh_private.param("publish_duration", pub_duration, 0.1);
-  m_nh_private.param("publish_merged_binary", m_publishMergedBinaryMap, true);
+  m_nh_private.param("publish_merged_binary", m_publishMergedBinaryMap, false);
   m_nh_private.param("publish_merged_full", m_publishMergedFullMap, false);
 
+  // Enable multiagent functions such as diff creation and merging
+  m_nh_private.param("multiagent", m_multiagent, false);
+  // Enable diff publishing (diffs are still created)
+  m_nh_private.param("publish_diffs", m_publishDiffs, false);
   // Threshold for when to add map diffs
   m_nh_private.param("diff_threshold", diff_threshold, 1000);
   // How many seconds to check/publish diffs
@@ -203,9 +208,17 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_nh_private.param("remove_ceiling", m_removeCeiling, false);
   m_nh_private.param("remove_ceiling_depth", m_removeCeilingDepth, 4);
 
+  bool pclInput = false;
+  bool octomapInput = false;
+
+  if (m_input == 1) pclInput = true;
+  else if (m_input == 2) octomapInput = true;
+
   // Normal octomap format map publishers
-  m_binaryMapPub = m_nh.advertise<Octomap>("octomap_binary", 1, m_latchedTopics);
-  m_fullMapPub = m_nh.advertise<Octomap>("octomap_full", 1, m_latchedTopics);
+  if (pclInput) {
+    m_binaryMapPub = m_nh.advertise<Octomap>("octomap_binary", 1, m_latchedTopics);
+    m_fullMapPub = m_nh.advertise<Octomap>("octomap_full", 1, m_latchedTopics);
+  }
 
   // Merged map publishers
   if (m_publishMergedBinaryMap)
@@ -214,8 +227,10 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
     m_mergedFullMapPub = m_nh.advertise<Octomap>("merged_map_full", 1, m_latchedTopics);
 
   // Diff map publishers
-  m_diffMapPub = m_nh.advertise<Octomap>("map_diff", 1, m_latchedTopics);
-  m_diffsMapPub = m_nh.advertise<marble_mapping::OctomapArray>("map_diffs", 1, m_latchedTopics);
+  if (m_publishDiffs) {
+    m_diffMapPub = m_nh.advertise<Octomap>("map_diff", 1, m_latchedTopics);
+    m_diffsMapPub = m_nh.advertise<marble_mapping::OctomapArray>("map_diffs", 1, m_latchedTopics);
+  }
 
   if (m_publishCameraMap)
     m_cameraMapPub = m_nh.advertise<Octomap>("camera_map", 1, m_latchedTopics);
@@ -253,26 +268,34 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   }
 
   // Subscribers
-  m_neighborsSub = m_nh.subscribe("neighbor_maps", 100, &MarbleMapping::neighborMapsCallback, this);
-  m_pointCloudSub = new message_filters::Subscriber<sensor_msgs::PointCloud2> (m_nh, "cloud_in", 5);
-  m_tfPointCloudSub = new tf::MessageFilter<sensor_msgs::PointCloud2> (*m_pointCloudSub, m_tfListener, m_worldFrameId, 5);
-  m_tfPointCloudSub->registerCallback(boost::bind(&MarbleMapping::insertCloudCallback, this, _1));
+  if (pclInput) {
+    m_pointCloudSub = new message_filters::Subscriber<sensor_msgs::PointCloud2> (m_nh, "cloud_in", 5);
+    m_tfPointCloudSub = new tf::MessageFilter<sensor_msgs::PointCloud2> (*m_pointCloudSub, m_tfListener, m_worldFrameId, 5);
+    m_tfPointCloudSub->registerCallback(boost::bind(&MarbleMapping::insertCloudCallback, this, _1));
+    // Services
+    m_octomapBinaryService = m_nh.advertiseService("octomap_binary", &MarbleMapping::octomapBinarySrv, this);
+    m_octomapFullService = m_nh.advertiseService("octomap_full", &MarbleMapping::octomapFullSrv, this);
+    m_resetService = m_nh_private.advertiseService("reset", &MarbleMapping::resetSrv, this);
+  } else if (octomapInput) {
+    m_octomapSub = m_nh.subscribe("cloud_in", 100, &MarbleMapping::octomapCallback, this);
+  }
 
-  // Services
-  m_octomapBinaryService = m_nh.advertiseService("octomap_binary", &MarbleMapping::octomapBinarySrv, this);
-  m_octomapFullService = m_nh.advertiseService("octomap_full", &MarbleMapping::octomapFullSrv, this);
-  m_resetService = m_nh_private.advertiseService("reset", &MarbleMapping::resetSrv, this);
+  if (m_multiagent) {
+    m_neighborsSub = m_nh.subscribe("neighbor_maps", 100, &MarbleMapping::neighborMapsCallback, this);
+    // Timer for updating the local map diff that will be broadcast
+    diff_timer = m_nh.createTimer(ros::Duration(diff_duration), &MarbleMapping::updateDiff, this);
+    // Timer for publishing the OctoMaps
+    pub_timer = m_nh.createTimer(ros::Duration(pub_duration), &MarbleMapping::publishOctoMaps, this);
+  }
 
-  // Timer for updating the local map diff that will be broadcast
-  diff_timer = m_nh.createTimer(ros::Duration(diff_duration), &MarbleMapping::updateDiff, this);
-  // Timer for publishing the OctoMaps
-  pub_timer = m_nh.createTimer(ros::Duration(pub_duration), &MarbleMapping::publishOctoMaps, this);
   // Timer to publish the optional maps, on a separate thread
   if (m_publishMarkerArray || m_publishFreeSpace || m_publishPointCloud) {
     ros::TimerOptions ops;
     ops.period = ros::Duration(pub_opt_duration);
     ops.callback = boost::bind(&MarbleMapping::publishOptionalMaps, this, _1);
-    ops.callback_queue = &pub_queue;
+    // Assign to the publishing thread, unless input is an octomap
+    // If input is octomap the map is deleted so need to run single threaded
+    if (!octomapInput) ops.callback_queue = &pub_queue;
     pub_opt_timer = m_nh.createTimer(ops);
   }
 
@@ -351,6 +374,11 @@ void MarbleMapping::neighborMapsCallback(const marble_mapping::OctomapNeighborsC
   // Better to put this somewhere else, but the callback should be infrequent enough this is ok
   mergeNeighbors();
   m_merged_tree->prune();
+}
+
+void MarbleMapping::octomapCallback(const octomap_msgs::OctomapConstPtr& msg) {
+  delete m_merged_tree;
+  m_merged_tree = (octomap::OcTreeStamped*)octomap_msgs::binaryMsgToMap(*msg);
 }
 
 void MarbleMapping::insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr& cloud){
@@ -599,21 +627,23 @@ void MarbleMapping::updateDiff(const ros::TimerEvent& event) {
 
   // Only update the diff map if enough has changed
   if (num_nodes > diff_threshold) {
-    num_diffs++;
-    m_diff_tree->prune();
+    if (m_publishDiffs) {
+      num_diffs++;
+      m_diff_tree->prune();
 
-    // Create and publish message for this diff
-    octomap_msgs::Octomap msg;
-    octomap_msgs::binaryMapToMsg(*m_diff_tree, msg);
-    msg.header.frame_id = m_worldFrameId;
-    msg.header.stamp = ros::Time().now();
-    msg.header.seq = num_diffs - 1;
-    m_diffMapPub.publish(msg);
+      // Create and publish message for this diff
+      octomap_msgs::Octomap msg;
+      octomap_msgs::binaryMapToMsg(*m_diff_tree, msg);
+      msg.header.frame_id = m_worldFrameId;
+      msg.header.stamp = ros::Time().now();
+      msg.header.seq = num_diffs - 1;
+      m_diffMapPub.publish(msg);
 
-    // Add the diff to the map diffs array
-    mapdiffs.octomaps.push_back(msg);
-    mapdiffs.num_octomaps = num_diffs;
-    m_diffsMapPub.publish(mapdiffs);
+      // Add the diff to the map diffs array
+      mapdiffs.octomaps.push_back(msg);
+      mapdiffs.num_octomaps = num_diffs;
+      m_diffsMapPub.publish(mapdiffs);
+    }
 
     // Publish the diff point cloud if enabled
     if (m_publishPointCloudDiff) {

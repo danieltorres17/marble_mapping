@@ -9,7 +9,7 @@
   <!-- Enable multiagent processing, such as diff creation and merging -->
   <arg name="multiagent" default="true" />
   <!-- Input type: 0=none, 1=pointcloud, 2=octomap -->
-  <arg name="input" default="1" />
+  <arg name="input" default="0" />
   <!-- Data source to integrate (PointCloud2) -->
   <arg name="cloud_in" default="points" />
   <!-- Maximum range to integrate (speedup!) -->
@@ -21,9 +21,9 @@
   <!-- Resolution to downsample point cloud using Voxel Grid Filter.  Set to 0 for none -->
   <arg name="downsample_size" default="0.0" />
   <!-- Secondary camera settings for a restricted view map, such as for an artifact camera -->
-  <arg name="build_camera_map" default="true" />
-  <arg name="publish_camera_map" default="true" />
-  <arg name="publish_camera_view" default="true" />
+  <arg name="build_camera_map" default="false" />
+  <arg name="publish_camera_map" default="false" />
+  <arg name="publish_camera_view" default="false" />
   <arg name="camera_range" default="5.0" />
   <!-- FOV must be < 180 degrees. Input 180.0 for full 360 coverage. -->
   <arg name="camera_horizontal_fov" default="90.0" />
@@ -43,7 +43,7 @@
   <arg name="remove_ceiling" default="true" />
   <arg name="remove_ceiling_depth" default="4" />
   <!-- Whether to publish the diff maps -->
-  <arg name="publish_diffs" default="true" />
+  <arg name="publish_diffs" default="false" />
   <!-- Number of new nodes required to create a new diff -->
   <arg name="diff_threshold" default="1000" />
   <!-- How many seconds to publish and reset diff map -->

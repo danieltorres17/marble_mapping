@@ -86,6 +86,7 @@ public:
   bool resetSrv(std_srvs::Empty::Request& req, std_srvs::Empty::Response& resp);
 
   virtual void neighborMapsCallback(const marble_mapping::OctomapNeighborsConstPtr& msg);
+  virtual void octomapCallback(const octomap_msgs::OctomapConstPtr& msg);
   virtual void insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr& cloud);
   virtual bool openFile(const std::string& filename);
 
@@ -135,6 +136,7 @@ protected:
   ros::NodeHandle m_nh_private;
   ros::Publisher  m_markerPub, m_binaryMapPub, m_fullMapPub, m_mergedBinaryMapPub, m_mergedFullMapPub, m_diffMapPub, m_diffsMapPub, m_cameraMapPub, m_cameraViewPub, m_pointCloudPub, m_pointCloudDiffPub, m_fmarkerPub;
   ros::Subscriber m_neighborsSub;
+  ros::Subscriber m_octomapSub;
   message_filters::Subscriber<sensor_msgs::PointCloud2>* m_pointCloudSub;
   tf::MessageFilter<sensor_msgs::PointCloud2>* m_tfPointCloudSub;
   ros::ServiceServer m_octomapBinaryService, m_octomapFullService, m_resetService;
@@ -154,6 +156,7 @@ protected:
   marble_mapping::OctomapArray mapdiffs;
   marble_mapping::OctomapNeighbors neighbors;
 
+  int m_input;
   double m_maxRange;
   std::string m_worldFrameId; // the map frame
   std::string m_baseFrameId; // base of the robot for ground plane filtering
@@ -163,7 +166,9 @@ protected:
 
   double pub_duration;
   double pub_opt_duration;
+  bool m_multiagent;
   bool m_latchedTopics;
+  bool m_publishDiffs;
   bool m_publishMarkerArray;
   bool m_publishFreeSpace;
   bool m_publishPointCloud;

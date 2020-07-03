@@ -113,6 +113,7 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_nh_private.param("diff_threshold", diff_threshold, 1000);
   // How many seconds to check/publish diffs
   m_nh_private.param("diff_duration", diff_duration, 10.0);
+  m_nh_private.param("diff_merged", m_diffMerged, false);
 
   if (m_filterGroundPlane && (m_pointcloudMinZ > 0.0 || m_pointcloudMaxZ < 0.0)){
     ROS_WARN_STREAM("You enabled ground filtering but incoming pointclouds will be pre-filtered in ["
@@ -138,15 +139,20 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   }
   omp_set_num_threads(m_numThreads);
 
-  // Merged OcTree, uses change detection to build diff tree
+  // Merged OcTree
   m_merged_tree = new OcTreeStamped(m_mres);
-  m_merged_tree->enableChangeDetection(true);
   m_merged_tree->setProbHit(probHit);
   m_merged_tree->setProbMiss(probMiss);
   m_merged_tree->setClampingThresMin(thresMin);
   m_merged_tree->setClampingThresMax(thresMax);
   m_treeDepth = m_merged_tree->getTreeDepth();
   m_maxTreeDepth = m_treeDepth;
+
+  // Use change detection to build diff tree
+  if (m_diffMerged)
+    m_merged_tree->enableChangeDetection(true);
+  else
+    m_octree->enableChangeDetection(true);
 
   // Differences OcTree, for sharing between agents
   m_diff_tree = new OcTreeT(m_mres);
@@ -202,6 +208,7 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_nh_private.param("publish_free_space", m_publishFreeSpace, false);
   m_nh_private.param("publish_point_cloud", m_publishPointCloud, false);
   m_nh_private.param("publish_point_cloud_diff", m_publishPointCloudDiff, false);
+  m_nh_private.param("publish_neighbor_maps", m_publishNeighborMaps, false);
 
   m_nh_private.param("latch", m_latchedTopics, m_latchedTopics);
 
@@ -598,32 +605,41 @@ void MarbleMapping::insertScan(const tf::StampedTransform& sensorToWorldTf, cons
   }
 }
 
-void MarbleMapping::updateDiff(const ros::TimerEvent& event) {
-  // TODO Add a check to see if we're in comm with anyone, and if not, don't update the diff
+template <class OcTreeMT>
+int MarbleMapping::updateDiffTree(OcTreeMT* tree, PCLPointCloud& pclDiffCloud) {
   // Find all changed nodes since last update and create a new octomap
-  KeyBoolMap::const_iterator startPnt = m_merged_tree->changedKeysBegin();
-  KeyBoolMap::const_iterator endPnt = m_merged_tree->changedKeysEnd();
-
-  PCLPointCloud pclDiffCloud;
-  size_t octomapSize = m_octree->size();
-
-  m_diff_tree->clear();
+  KeyBoolMap::const_iterator startPnt = tree->changedKeysBegin();
+  KeyBoolMap::const_iterator endPnt = tree->changedKeysEnd();
 
   int num_nodes = 0;
   for (KeyBoolMap::const_iterator iter = startPnt; iter != endPnt; ++iter) {
     // Copy the value for each node
-    OcTreeNodeStamped* node = m_merged_tree->search(iter->first);
-    if ((node->getTimestamp() == 1) || (octomapSize == 0)) {
-      m_diff_tree->setNodeValue(iter->first, node->getLogOdds());
-      num_nodes++;
-    }
+    OcTreeNode* node = tree->search(iter->first);
+
+    m_diff_tree->setNodeValue(iter->first, node->getLogOdds());
+    num_nodes++;
 
     // Create a point cloud diff if enabled
     if ((m_publishPointCloudDiff) && (node->getLogOdds() >= 0)) {
-      point3d point = m_merged_tree->keyToCoord(iter->first);
+      point3d point = tree->keyToCoord(iter->first);
       pclDiffCloud.push_back(PCLPoint(point.x(), point.y(), point.z()));
     }
   }
+
+  return num_nodes;
+}
+
+void MarbleMapping::updateDiff(const ros::TimerEvent& event) {
+  // TODO Add a check to see if we're in comm with anyone, and if not, don't update the diff
+  PCLPointCloud pclDiffCloud;
+  int num_nodes;
+
+  // Update the diff tree from either the merged map or self map
+  m_diff_tree->clear();
+  if (m_diffMerged)
+    num_nodes = updateDiffTree(m_merged_tree, pclDiffCloud);
+  else
+    num_nodes = updateDiffTree(m_octree, pclDiffCloud);
 
   // Only update the diff map if enough has changed
   if (num_nodes > diff_threshold) {
@@ -654,7 +670,10 @@ void MarbleMapping::updateDiff(const ros::TimerEvent& event) {
       m_pointCloudDiffPub.publish(cloud);
     }
 
-    m_merged_tree->resetChangeDetection();
+    if (m_diffMerged)
+      m_merged_tree->resetChangeDetection();
+    else
+      m_octree->resetChangeDetection();
   }
 }
 
@@ -666,6 +685,13 @@ void MarbleMapping::mergeNeighbors() {
 
   for (int i=0; i< neighbors.num_neighbors; i++) {
     std::string nid = neighbors.neighbors[i].owner;
+    // Initialize neighbor map data if enabled
+    if (m_publishNeighborMaps && !neighbor_maps[nid.data()]) {
+      neighbor_maps[nid.data()] = new OcTreeT(m_mres);
+      neighbor_updated[nid.data()] = false;
+      neighbor_pubs[nid.data()] = m_nh.advertise<Octomap>("neighbors/"+nid+"/map", 1, m_latchedTopics);
+    }
+
     // Check each diff for new ones to merge
     for (int j=0; j < neighbors.neighbors[i].num_octomaps; j++) {
       uint32_t cur_seq = neighbors.neighbors[i].octomaps[j].header.seq;
@@ -719,6 +745,16 @@ void MarbleMapping::mergeNeighbors() {
             // If the node doesn't exist in the merged map, add it with the value
             OcTreeNodeStamped *newNode = m_merged_tree->setNodeValue(nodeKey, it->getLogOdds());
             newNode->setTimestamp(ts);
+          }
+
+          // If neighbor maps enabled, add the node if it's new
+          if (m_publishNeighborMaps) {
+            neighbor_updated[nid.data()] = true;
+            if (neighbor_maps[nid.data()]->search(nodeKey) != NULL) {
+                neighbor_maps[nid.data()]->setNodeValue(nodeKey, it->getLogOdds());
+            } else {
+              neighbor_maps[nid.data()]->setNodeValue(nodeKey, it->getLogOdds());
+            }
           }
         }
 
@@ -918,6 +954,9 @@ void MarbleMapping::publishOctoMaps(const ros::TimerEvent& event) {
   if (publishCameraView)
     m_cameraViewPub.publish(m_cameraView);
 
+  if (m_publishNeighborMaps)
+    publishNeighborMaps(rostime);
+
   double total_elapsed = (ros::WallTime::now() - startTime).toSec();
   ROS_DEBUG("Map publishing in MarbleMapping took %f sec", total_elapsed);
 }
@@ -1049,6 +1088,23 @@ void MarbleMapping::publishCameraOctoMap(const ros::Time& rostime) const{
     m_cameraMapPub.publish(map);
   } else
     ROS_ERROR("Error serializing OctoMap");
+}
+
+void MarbleMapping::publishNeighborMaps(const ros::Time& rostime) {
+  for (auto& n : neighbor_maps) {
+    // Find any maps that have been updated, and have subscribers
+    if (neighbor_updated.at(n.first) && (neighbor_pubs.at(n.first).getNumSubscribers() > 0)) {
+      neighbor_updated.at(n.first) = false;
+      Octomap map;
+      map.header.frame_id = m_worldFrameId;
+      map.header.stamp = rostime;
+
+      if (octomap_msgs::binaryMapToMsg(*n.second, map))
+        neighbor_pubs.at(n.first).publish(map);
+      else
+        ROS_ERROR("Error serializing OctoMap");
+    }
+  }
 }
 
 void MarbleMapping::filterGroundPlane(const PCLPointCloud& pc, PCLPointCloud& ground, PCLPointCloud& nonground) const{

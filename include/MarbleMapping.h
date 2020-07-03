@@ -97,6 +97,7 @@ protected:
   void publishMergedBinaryOctoMap(const ros::Time& rostime = ros::Time::now()) const;
   void publishMergedFullOctoMap(const ros::Time& rostime = ros::Time::now()) const;
   void publishCameraOctoMap(const ros::Time& rostime = ros::Time::now()) const;
+  void publishNeighborMaps(const ros::Time& rostime = ros::Time::now());
   void publishOctoMaps(const ros::TimerEvent& event);
   void publishOptionalMaps(const ros::TimerEvent& event);
 
@@ -111,6 +112,8 @@ protected:
   virtual void insertScan(const tf::StampedTransform& sensorToWorldTf, const PCLPointCloud& ground, const PCLPointCloud& nonground);
 
   // Check the changes since last run to publish for sharing to other agents
+  template <class OcTreeMT>
+  int updateDiffTree(OcTreeMT* tree, PCLPointCloud& pclDiffCloud);
   void updateDiff(const ros::TimerEvent& event);
 
   // Merge all neighbor maps
@@ -155,6 +158,9 @@ protected:
 
   marble_mapping::OctomapArray mapdiffs;
   marble_mapping::OctomapNeighbors neighbors;
+  std::map<std::string, OcTreeT*> neighbor_maps;
+  std::map<std::string, bool> neighbor_updated;
+  std::map<std::string, ros::Publisher> neighbor_pubs;
 
   int m_input;
   double m_maxRange;
@@ -177,6 +183,7 @@ protected:
   bool m_publishMergedFullMap;
   bool m_publishCameraMap;
   bool m_publishCameraView;
+  bool m_publishNeighborMaps;
 
   bool m_removeCeiling;
   int m_removeCeilingDepth;
@@ -191,6 +198,7 @@ protected:
   double diff_duration;
   unsigned num_diffs;
   unsigned next_idx;
+  bool m_diffMerged;
   std::map<std::string, std::vector<int>> seqs;
   std::map<std::string, int> idx;
 

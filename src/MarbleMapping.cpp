@@ -378,6 +378,18 @@ bool MarbleMapping::openFile(const std::string& filename){
 
 void MarbleMapping::neighborMapsCallback(const marble_mapping::OctomapNeighborsConstPtr& msg) {
   neighbors = *msg;
+
+  // If hard reset passed, start the self and merged map over!
+  if (neighbors.hardReset) {
+    m_octree->clear();
+    if (m_diffMerged)
+      m_merged_tree->resetChangeDetection();
+    else
+      m_octree->resetChangeDetection();
+    mapdiffs = marble_mapping::OctomapArray();
+    num_diffs = 0;
+  }
+
   // Better to put this somewhere else, but the callback should be infrequent enough this is ok
   mergeNeighbors();
   m_merged_tree->prune();
@@ -616,13 +628,16 @@ int MarbleMapping::updateDiffTree(OcTreeMT* tree, PCLPointCloud& pclDiffCloud) {
     // Copy the value for each node
     OcTreeNode* node = tree->search(iter->first);
 
-    m_diff_tree->setNodeValue(iter->first, node->getLogOdds());
-    num_nodes++;
+    // We should never have a NULL node, but just in case...
+    if (node != NULL) {
+      m_diff_tree->setNodeValue(iter->first, node->getLogOdds());
+      num_nodes++;
 
-    // Create a point cloud diff if enabled
-    if ((m_publishPointCloudDiff) && (node->getLogOdds() >= 0)) {
-      point3d point = tree->keyToCoord(iter->first);
-      pclDiffCloud.push_back(PCLPoint(point.x(), point.y(), point.z()));
+      // Create a point cloud diff if enabled
+      if ((m_publishPointCloudDiff) && (node->getLogOdds() >= 0)) {
+        point3d point = tree->keyToCoord(iter->first);
+        pclDiffCloud.push_back(PCLPoint(point.x(), point.y(), point.z()));
+      }
     }
   }
 
@@ -683,8 +698,31 @@ void MarbleMapping::mergeNeighbors() {
   bool overwrite_node;
   unsigned ts;
 
-  for (int i=0; i< neighbors.num_neighbors; i++) {
+  for (int i=0; i < neighbors.num_neighbors; i++) {
     std::string nid = neighbors.neighbors[i].owner;
+
+    // If clear passed then re-merge everything
+    if (neighbors.clear) {
+      if (i == 0) {
+        // First time through clear the merged tree, and reset change detection if necessary
+        m_merged_tree->clear();
+
+        // Copy the self map to merged map
+        for (OcTree::leaf_iterator it = m_octree->begin_leafs();
+            it != m_octree->end_leafs(); ++it) {
+          point3d point = it.getCoordinate();
+          OcTreeNodeStamped *newNode = m_merged_tree->setNodeValue(point, it->getLogOdds());
+          newNode->setTimestamp(1);
+        }
+
+        if (m_diffMerged)
+          m_merged_tree->resetChangeDetection();
+      }
+      // For each neighbor, clear the diffs
+      seqs[nid.data()].clear();
+      neighbor_maps[nid.data()] = NULL;
+    }
+
     // Initialize neighbor map data if enabled
     if (m_publishNeighborMaps && !neighbor_maps[nid.data()]) {
       neighbor_maps[nid.data()] = new OcTreeT(m_mres);
@@ -693,7 +731,7 @@ void MarbleMapping::mergeNeighbors() {
     }
 
     // Check each diff for new ones to merge
-    for (int j=0; j < neighbors.neighbors[i].num_octomaps; j++) {
+    for (int j=0; j < neighbors.neighbors[i].octomaps.size(); j++) {
       uint32_t cur_seq = neighbors.neighbors[i].octomaps[j].header.seq;
       bool exists = std::count(seqs[nid.data()].cbegin(), seqs[nid.data()].cend(), cur_seq);
 

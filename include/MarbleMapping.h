@@ -147,6 +147,7 @@ protected:
   ros::Timer pub_timer;
   ros::Timer pub_opt_timer;
   tf::TransformListener m_tfListener;
+  boost::mutex m_mtx;
   boost::recursive_mutex m_config_mutex;
   dynamic_reconfigure::Server<MarbleMappingConfig> m_reconfigureServer;
 

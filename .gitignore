@@ -13,3 +13,4 @@
 *.a
 
 tags
+CATKIN_IGNORE

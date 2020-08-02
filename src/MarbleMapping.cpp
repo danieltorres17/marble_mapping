@@ -392,6 +392,7 @@ void MarbleMapping::neighborMapsCallback(const marble_mapping::OctomapNeighborsC
 
   // Better to put this somewhere else, but the callback should be infrequent enough this is ok
   mergeNeighbors();
+  boost::mutex::scoped_lock lock(m_mtx);
   m_merged_tree->prune();
 }
 
@@ -497,6 +498,7 @@ void MarbleMapping::insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr
   insertScan(sensorToWorldTf, pc_ground, pc_nonground);
 
   m_octree->prune();
+  boost::mutex::scoped_lock lock(m_mtx);
   m_merged_tree->prune();
 
   double total_elapsed = (ros::WallTime::now() - startTime).toSec();
@@ -588,6 +590,7 @@ void MarbleMapping::insertScan(const tf::StampedTransform& sensorToWorldTf, cons
   double total_elapsed = (ros::WallTime::now() - startTime).toSec();
   ROS_DEBUG("The %zu points took %f seconds)", nonground.size(), total_elapsed);
 
+  boost::mutex::scoped_lock lock(m_mtx);
   // mark free cells only if not seen occupied in this cloud
   for(KeySet::iterator it = free_cells.begin(), end=free_cells.end(); it!= end; ++it){
     if (occupied_cells.find(*it) == occupied_cells.end()){
@@ -704,6 +707,7 @@ void MarbleMapping::mergeNeighbors() {
     // If clear passed then re-merge everything
     if (neighbors.clear) {
       if (i == 0) {
+        boost::mutex::scoped_lock lock(m_mtx);
         // First time through clear the merged tree, and reset change detection if necessary
         m_merged_tree->clear();
 
@@ -760,6 +764,7 @@ void MarbleMapping::mergeNeighbors() {
 
         // Iterate through the diff tree and merge
         ntree->expand();
+        boost::mutex::scoped_lock lock(m_mtx);
         for (OcTree::leaf_iterator it = ntree->begin_leafs(); it != ntree->end_leafs(); ++it) {
           OcTreeKey nodeKey = it.getKey();
           OcTreeNodeStamped *nodeM = m_merged_tree->search(nodeKey);
@@ -827,6 +832,7 @@ void MarbleMapping::publishOptionalMaps(const ros::TimerEvent& event) {
     occupiedNodesVis.markers.resize(m_treeDepth+1);
 
     // now, traverse all leafs in the tree:
+    boost::mutex::scoped_lock lock(m_mtx);
     for (OcTreeStamped::iterator it = m_merged_tree->begin(m_maxTreeDepth),
         end = m_merged_tree->end(); it != end; ++it) {
       if (m_merged_tree->isNodeOccupied(*it)) {

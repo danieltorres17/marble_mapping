@@ -62,6 +62,7 @@ set(LINK_LIBS
 add_library(${PROJECT_NAME} src/MarbleMapping.cpp)
 target_link_libraries(${PROJECT_NAME} ${LINK_LIBS})
 add_dependencies(${PROJECT_NAME} ${PROJECT_NAME}_gencfg)
+add_dependencies(${PROJECT_NAME} ${PROJECT_NAME}_generate_messages_cpp)
 
 add_executable(marble_mapping_node src/marble_mapping_node.cpp)
 target_link_libraries(marble_mapping_node ${PROJECT_NAME} ${LINK_LIBS})

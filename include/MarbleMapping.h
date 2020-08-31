@@ -87,6 +87,7 @@ public:
 
   virtual void neighborMapsCallback(const marble_mapping::OctomapNeighborsConstPtr& msg);
   virtual void octomapCallback(const octomap_msgs::OctomapConstPtr& msg);
+  virtual void octomapDiffsCallback(const octomap_msgs::OctomapConstPtr& msg, const std::string owner);
   virtual void insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr& cloud);
   virtual bool openFile(const std::string& filename);
 
@@ -139,7 +140,7 @@ protected:
   ros::NodeHandle m_nh_private;
   ros::Publisher  m_markerPub, m_binaryMapPub, m_fullMapPub, m_mergedBinaryMapPub, m_mergedFullMapPub, m_diffMapPub, m_diffsMapPub, m_cameraMapPub, m_cameraViewPub, m_pointCloudPub, m_pointCloudDiffPub, m_fmarkerPub;
   ros::Subscriber m_neighborsSub;
-  ros::Subscriber m_octomapSub;
+  ros::Subscriber m_octomapSub, m_diff1Sub, m_diff2Sub, m_diff3Sub, m_diff4Sub;
   message_filters::Subscriber<sensor_msgs::PointCloud2>* m_pointCloudSub;
   tf::MessageFilter<sensor_msgs::PointCloud2>* m_tfPointCloudSub;
   ros::ServiceServer m_octomapBinaryService, m_octomapFullService, m_resetService;

@@ -217,9 +217,11 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
 
   bool pclInput = false;
   bool octomapInput = false;
+  bool diffInput = false;
 
   if (m_input == 1) pclInput = true;
   else if (m_input == 2) octomapInput = true;
+  else if (m_input == 3) diffInput = true;
 
   // Normal octomap format map publishers
   if (pclInput) {
@@ -285,6 +287,16 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
     m_resetService = m_nh_private.advertiseService("reset", &MarbleMapping::resetSrv, this);
   } else if (octomapInput) {
     m_octomapSub = m_nh.subscribe("cloud_in", 100, &MarbleMapping::octomapCallback, this);
+  } else if (diffInput) {
+    m_diff1Sub = m_nh.subscribe<octomap_msgs::Octomap>("diff1", 100, boost::bind(&MarbleMapping::octomapDiffsCallback, this, _1, "X1"));
+    m_diff2Sub = m_nh.subscribe<octomap_msgs::Octomap>("diff2", 100, boost::bind(&MarbleMapping::octomapDiffsCallback, this, _1, "X2"));
+    m_diff3Sub = m_nh.subscribe<octomap_msgs::Octomap>("diff3", 100, boost::bind(&MarbleMapping::octomapDiffsCallback, this, _1, "X3"));
+    m_diff4Sub = m_nh.subscribe<octomap_msgs::Octomap>("diff4", 100, boost::bind(&MarbleMapping::octomapDiffsCallback, this, _1, "X4"));
+    // Populate the neighbors message so mergeNeighbors will work
+    neighbors.num_neighbors = 1;
+    neighbors.neighbors.push_back(marble_mapping::OctomapArray());
+    neighbors.neighbors[0].num_octomaps = 1;
+    neighbors.neighbors[0].octomaps.push_back(octomap_msgs::Octomap());
   }
 
   if (m_multiagent) {
@@ -399,6 +411,25 @@ void MarbleMapping::neighborMapsCallback(const marble_mapping::OctomapNeighborsC
 void MarbleMapping::octomapCallback(const octomap_msgs::OctomapConstPtr& msg) {
   delete m_merged_tree;
   m_merged_tree = (octomap::OcTreeStamped*)octomap_msgs::binaryMsgToMap(*msg);
+}
+
+void MarbleMapping::octomapDiffsCallback(const octomap_msgs::OctomapConstPtr& msg, const std::string owner) {
+  // Update the neighbors message with current info
+  neighbors.neighbors[0].owner = owner;
+  neighbors.neighbors[0].octomaps[0] = *msg;
+
+  // Merge the diff
+  mergeNeighbors();
+  boost::mutex::scoped_lock lock(m_mtx);
+  m_merged_tree->prune();
+
+  // Publish the binary maps
+  ros::Time rostime = ros::Time::now();
+  if (m_publishMergedBinaryMap)
+    publishMergedBinaryOctoMap(rostime);
+
+  if (m_publishNeighborMaps)
+    publishNeighborMaps(rostime);
 }
 
 void MarbleMapping::insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr& cloud){

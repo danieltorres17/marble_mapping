@@ -140,7 +140,7 @@ protected:
   ros::NodeHandle m_nh_private;
   ros::Publisher  m_markerPub, m_binaryMapPub, m_fullMapPub, m_mergedBinaryMapPub, m_mergedFullMapPub, m_diffMapPub, m_diffsMapPub, m_cameraMapPub, m_cameraViewPub, m_pointCloudPub, m_pointCloudDiffPub, m_fmarkerPub;
   ros::Subscriber m_neighborsSub;
-  ros::Subscriber m_octomapSub, m_diff1Sub, m_diff2Sub, m_diff3Sub, m_diff4Sub;
+  ros::Subscriber m_octomapSub;
   message_filters::Subscriber<sensor_msgs::PointCloud2>* m_pointCloudSub;
   tf::MessageFilter<sensor_msgs::PointCloud2>* m_tfPointCloudSub;
   ros::ServiceServer m_octomapBinaryService, m_octomapFullService, m_resetService;
@@ -228,6 +228,12 @@ protected:
   double camera_range, camera_h, camera_w;
   Eigen::Vector4f pl_f, pl_t, pl_b, pl_r, pl_l;
   visualization_msgs::Marker m_cameraView;
+
+  // Diff merging variables
+  std::string m_agents;
+  std::string m_diff_pre;
+  std::string m_diff_post;
+  std::map<std::string, ros::Subscriber> m_diffSubs;
 };
 }
 

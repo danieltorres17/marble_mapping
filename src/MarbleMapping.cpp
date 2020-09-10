@@ -215,6 +215,11 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_nh_private.param("remove_ceiling", m_removeCeiling, false);
   m_nh_private.param("remove_ceiling_depth", m_removeCeilingDepth, 4);
 
+  // Diff merging parameters
+  m_nh_private.param("agents", m_agents, std::string("X1,X2"));
+  m_nh_private.param("diff_pre", m_diff_pre, std::string("/robot_data/"));
+  m_nh_private.param("diff_post", m_diff_post, std::string("/map_diff"));
+
   bool pclInput = false;
   bool octomapInput = false;
   bool diffInput = false;
@@ -288,10 +293,20 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   } else if (octomapInput) {
     m_octomapSub = m_nh.subscribe("cloud_in", 100, &MarbleMapping::octomapCallback, this);
   } else if (diffInput) {
-    m_diff1Sub = m_nh.subscribe<octomap_msgs::Octomap>("diff1", 100, boost::bind(&MarbleMapping::octomapDiffsCallback, this, _1, "X1"));
-    m_diff2Sub = m_nh.subscribe<octomap_msgs::Octomap>("diff2", 100, boost::bind(&MarbleMapping::octomapDiffsCallback, this, _1, "X2"));
-    m_diff3Sub = m_nh.subscribe<octomap_msgs::Octomap>("diff3", 100, boost::bind(&MarbleMapping::octomapDiffsCallback, this, _1, "X3"));
-    m_diff4Sub = m_nh.subscribe<octomap_msgs::Octomap>("diff4", 100, boost::bind(&MarbleMapping::octomapDiffsCallback, this, _1, "X4"));
+    // Get the agents from the launch parameters
+    std::vector<std::string> agents_vec;
+    std::replace(m_agents.begin(), m_agents.end(), ',', ' ');
+    std::stringstream ss(m_agents);
+    std::string temp;
+    while (ss >> temp)
+      agents_vec.push_back(temp);
+
+    // Create a subscriber for each agent
+    for (auto agent : agents_vec) {
+      std::string topic = m_diff_pre + agent + m_diff_post;
+      m_diffSubs[agent] = m_nh.subscribe<octomap_msgs::Octomap>(topic, 100, boost::bind(&MarbleMapping::octomapDiffsCallback, this, _1, agent));
+    }
+
     // Populate the neighbors message so mergeNeighbors will work
     neighbors.num_neighbors = 1;
     neighbors.neighbors.push_back(marble_mapping::OctomapArray());

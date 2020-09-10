@@ -10,10 +10,9 @@
   <!-- Input type: 0=none, 1=pointcloud, 2=octomap, 3=diffs -->
   <arg name="input" default="3" />
   <!-- Data source(s) to integrate (OctoMap) -->
-  <arg name="diff1" default="/robot_data/X1/map_diff" />
-  <arg name="diff2" default="/robot_data/X2/map_diff" />
-  <arg name="diff3" default="/robot_data/X3/map_diff" />
-  <arg name="diff4" default="/robot_data/X4/map_diff" />
+  <arg name="agents" default="X1,X2,X3,X4" />
+  <arg name="diff_pre" default="/robot_data/" />
+  <arg name="diff_post" default="/map_diff" />
   <!-- Topic prefix to output to, ie merged_map outputs to merged_map_markers, etc -->
   <arg name="prefix" default="merged_map" />
   <arg name="publish_merged_binary" default="true" />
@@ -32,6 +31,9 @@
     <param name="merged_resolution" value="$(arg merged_resolution)" />
     <param name="frame_id" type="string" value="$(arg frame_id)" />
     <param name="input" value="$(arg input)" />
+    <param name="agents" value="$(arg agents)" />
+    <param name="diff_pre" value="$(arg diff_pre)" />
+    <param name="diff_post" value="$(arg diff_post)" />
 
     <param name="publish_merged_binary" value="$(arg publish_merged_binary)" />
     <param name="publish_neighbor_maps" value="$(arg publish_neighbor_maps)" />
@@ -43,10 +45,6 @@
     <param name="remove_ceiling" value="$(arg remove_ceiling)" />
     <param name="remove_ceiling_depth" value="$(arg remove_ceiling_depth)" />
 
-    <remap from="diff1" to="$(arg diff1)" />
-    <remap from="diff2" to="$(arg diff2)" />
-    <remap from="diff3" to="$(arg diff3)" />
-    <remap from="diff4" to="$(arg diff4)" />
     <remap from="merged_map_markers" to="$(arg prefix)_markers" />
     <remap from="merged_map_free" to="$(arg prefix)_free" />
     <remap from="merged_map_pc" to="$(arg prefix)_pc" />

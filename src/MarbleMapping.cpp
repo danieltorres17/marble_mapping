@@ -418,7 +418,12 @@ void MarbleMapping::neighborMapsCallback(const marble_mapping::OctomapNeighborsC
   }
 
   // Better to put this somewhere else, but the callback should be infrequent enough this is ok
-  mergeNeighbors();
+  try {
+    mergeNeighbors();
+  } catch (const std::exception& e) {
+    ROS_ERROR("merging error! %s", e.what());
+  }
+
   boost::mutex::scoped_lock lock(m_mtx);
   m_merged_tree->prune();
 }
@@ -434,7 +439,12 @@ void MarbleMapping::octomapDiffsCallback(const octomap_msgs::OctomapConstPtr& ms
   neighbors.neighbors[0].octomaps[0] = *msg;
 
   // Merge the diff
-  mergeNeighbors();
+  try {
+    mergeNeighbors();
+  } catch (const std::exception& e) {
+    ROS_ERROR("merging error! %s", e.what());
+  }
+
   boost::mutex::scoped_lock lock(m_mtx);
   m_merged_tree->prune();
 
@@ -743,7 +753,7 @@ void MarbleMapping::updateDiff(const ros::TimerEvent& event) {
 
 void MarbleMapping::mergeNeighbors() {
   // Merge neighbor maps with local map
-  octomap::OcTree* ntree;
+  std::shared_ptr<octomap::OcTree> ntree(nullptr);
   bool overwrite_node;
   unsigned ts;
 
@@ -804,14 +814,15 @@ void MarbleMapping::mergeNeighbors() {
           overwrite_node = false;
 
         if (neighbors.neighbors[i].octomaps[j].binary)
-          ntree = (octomap::OcTree*)octomap_msgs::binaryMsgToMap(neighbors.neighbors[i].octomaps[j]);
+          ntree = std::shared_ptr<octomap::OcTree>(dynamic_cast<octomap::OcTree*>(octomap_msgs::binaryMsgToMap(neighbors.neighbors[i].octomaps[j])));
         else
-          ntree = (octomap::OcTree*)octomap_msgs::fullMsgToMap(neighbors.neighbors[i].octomaps[j]);
+          ntree = std::shared_ptr<octomap::OcTree>(dynamic_cast<octomap::OcTree*>(octomap_msgs::fullMsgToMap(neighbors.neighbors[i].octomaps[j])));
 
         // Iterate through the diff tree and merge
         ntree->expand();
         boost::mutex::scoped_lock lock(m_mtx);
-        for (OcTree::leaf_iterator it = ntree->begin_leafs(); it != ntree->end_leafs(); ++it) {
+        for (OcTree::leaf_iterator it = ntree->begin_leafs(), end = ntree->end_leafs();
+            it != end; ++it) {
           OcTreeKey nodeKey = it.getKey();
           OcTreeNodeStamped *nodeM = m_merged_tree->search(nodeKey);
           if (nodeM != NULL) {
@@ -846,8 +857,6 @@ void MarbleMapping::mergeNeighbors() {
             }
           }
         }
-
-        delete ntree;
       }
     }
   }

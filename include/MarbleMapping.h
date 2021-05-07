@@ -191,6 +191,7 @@ protected:
   bool m_publishCameraMap;
   bool m_publishCameraView;
   bool m_publishNeighborMaps;
+  ros::Time last_pub_time;
 
   bool m_removeCeiling;
   int m_removeCeilingDepth;

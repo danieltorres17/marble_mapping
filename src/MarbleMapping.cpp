@@ -1082,9 +1082,14 @@ void MarbleMapping::publishOptionalMaps(const ros::TimerEvent& event) {
 void MarbleMapping::publishOctoMaps(const ros::TimerEvent& event) {
   ros::WallTime startTime = ros::WallTime::now();
   ros::Time rostime = ros::Time::now();
-  if ((m_octree->size() <= 1) && (m_merged_tree->size() <= 1)) {
+  if (((m_octree->size() <= 1) && (m_merged_tree->size() <= 1)) ||
+      (rostime < last_pub_time + ros::Duration(pub_duration))) {
     return;
   }
+
+  // if ((m_octree->size() <= 1) && (m_merged_tree->size() <= 1)) {
+  //   return;
+  // }
 
   bool publishMergedBinaryMap = m_publishMergedBinaryMap && (m_mergedBinaryMapPub.getNumSubscribers() > 0);
   bool publishMergedFullMap = m_publishMergedFullMap && (m_mergedFullMapPub.getNumSubscribers() > 0);
@@ -1114,6 +1119,7 @@ void MarbleMapping::publishOctoMaps(const ros::TimerEvent& event) {
   if (m_publishNeighborMaps)
     publishNeighborMaps(rostime);
 
+  last_pub_time = ros::Time::now();
   double total_elapsed = (ros::WallTime::now() - startTime).toSec();
   ROS_DEBUG("Map publishing in MarbleMapping took %f sec", total_elapsed);
 }

@@ -12,12 +12,15 @@
   <arg name="input" default="1" />
   <!-- Data source to integrate (PointCloud2) -->
   <arg name="cloud_in" default="points" />
-  <!-- Maximum range to integrate (speedup!) -->
+  <!-- Minimum / Maximum range to integrate (speedup!) -->
+  <arg name="min_range" default="0.0" />
   <arg name="max_range" default="7.0" />
 
   <!-- Performance Tuning Options-->
   <!-- Whether to prune maps as they're created.  Expensive on big maps! -->
   <arg name="compress_maps" default="false" />
+  <!-- Whether to remove outliers in the PCL.  Big performance hit! -->
+  <arg name="enable_radius_outlier_removal" default="false" />
   <!-- Number of threads to use for PCL processing. Setting '0' or a value greater than
        maximum value will use the OMP_NUM_THREADS variable or maximum CPU threads if not set.
        At low resolutions recommend '1' for best performance.
@@ -79,7 +82,9 @@
     <param name="multiagent" value="$(arg multiagent)" />
     <param name="input" value="$(arg input)" />
     <param name="sensor_model/max_range" value="$(arg max_range)" />
+    <param name="sensor_model/min_range" value="$(arg min_range)" />
     <param name="compress_maps" value="$(arg compress_maps)" />
+    <param name="enable_radius_outlier_removal" value="$(arg enable_radius_outlier_removal)" />
     <param name="num_threads" value="$(arg num_threads)" />
     <param name="downsample_size" value="$(arg downsample_size)" />
     <param name="pcl_time_limit" value="$(arg pcl_time_limit)" />

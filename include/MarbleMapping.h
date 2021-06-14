@@ -55,6 +55,7 @@
 #include <pcl/filters/extract_indices.h>
 #include <pcl/filters/passthrough.h>
 #include <pcl/filters/voxel_grid.h>
+#include <pcl/filters/radius_outlier_removal.h>
 #include <pcl_conversions/pcl_conversions.h>
 
 
@@ -171,6 +172,7 @@ protected:
 
   int m_input;
   double m_maxRange;
+  double m_minRange;
   std::string m_worldFrameId; // the map frame
   std::string m_baseFrameId; // base of the robot for ground plane filtering
   std_msgs::ColorRGBA m_color;
@@ -220,6 +222,7 @@ protected:
 
   // Performance Tuning
   bool m_compressMaps;
+  bool m_enable_radius_outlier_removal;
   double m_downsampleSize;
   double m_pclTimeLimit;
   int m_numThreads;

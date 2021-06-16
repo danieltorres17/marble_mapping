@@ -15,6 +15,7 @@ set(PACKAGE_DEPENDENCIES
   dynamic_reconfigure
   nodelet
   message_generation
+  rough_octomap
 )
 
 

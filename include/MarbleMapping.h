@@ -64,12 +64,12 @@
 #include <message_filters/subscriber.h>
 #include <octomap_msgs/Octomap.h>
 #include <octomap_msgs/GetOctomap.h>
-#include <octomap_msgs/conversions.h>
 
 #include <octomap_ros/conversions.h>
 #include <octomap/octomap.h>
-#include <octomap/OcTreeStamped.h>
 #include <octomap/OcTreeKey.h>
+#include <rough_octomap/RoughOcTree.h>
+#include <rough_octomap/conversions.h>
 #include <omp.h>
 
 #include "marble_mapping/OctomapArray.h"
@@ -79,9 +79,10 @@ namespace marble_mapping {
 class MarbleMapping {
 
 public:
-  typedef pcl::PointXYZ PCLPoint;
-  typedef pcl::PointCloud<pcl::PointXYZ> PCLPointCloud;
+  typedef pcl::PointXYZI PCLPoint;
+  typedef pcl::PointCloud<PCLPoint> PCLPointCloud;
   typedef octomap::OcTree OcTreeT;
+  typedef octomap::RoughOcTree RoughOcTreeT;
   typedef octomap_msgs::GetOctomap OctomapSrv;
   ros::CallbackQueue pub_queue;
 
@@ -158,15 +159,15 @@ protected:
   boost::recursive_mutex m_config_mutex;
   dynamic_reconfigure::Server<MarbleMappingConfig> m_reconfigureServer;
 
-  OcTreeT* m_octree;
-  OcTreeT* m_diff_tree;
+  RoughOcTreeT* m_octree;
+  RoughOcTreeT* m_diff_tree;
   OcTreeT* m_camera_tree;
-  octomap::OcTreeStamped* m_merged_tree;
+  RoughOcTreeT* m_merged_tree;
   std::vector<octomap::KeyRay> keyrays;
 
   marble_mapping::OctomapArray mapdiffs;
   marble_mapping::OctomapNeighbors neighbors;
-  std::map<std::string, OcTreeT*> neighbor_maps;
+  std::map<std::string, RoughOcTreeT*> neighbor_maps;
   std::map<std::string, bool> neighbor_updated;
   std::map<std::string, ros::Publisher> neighbor_pubs;
 
@@ -202,14 +203,17 @@ protected:
   unsigned m_treeDepth;
   unsigned m_maxTreeDepth;
 
+  bool m_enableTraversability;
+  bool m_enableTraversabilitySharing;
+  bool m_enableTraversabilityMarkers;
+
   // Diff parameters
   int diff_threshold;
   double diff_duration;
   unsigned num_diffs;
-  unsigned next_idx;
-  bool m_diffMerged;
+  char next_idx;
   std::map<std::string, std::vector<int>> seqs;
-  std::map<std::string, int> idx;
+  std::map<std::string, char> idx;
 
   double m_pointcloudMinX;
   double m_pointcloudMaxX;

@@ -100,8 +100,8 @@ public:
 
 protected:
   void reconfigureCallback(marble_mapping::MarbleMappingConfig& config, uint32_t level);
-  void publishBinaryOctoMap(const ros::Time& rostime = ros::Time::now()) const;
-  void publishFullOctoMap(const ros::Time& rostime = ros::Time::now()) const;
+  void publishBinaryOctoMap(RoughOcTreeT& self_tree, const ros::Time& rostime = ros::Time::now()) const;
+  void publishFullOctoMap(RoughOcTreeT& self_tree, const ros::Time& rostime = ros::Time::now()) const;
   void publishMergedBinaryOctoMap(const ros::Time& rostime = ros::Time::now()) const;
   void publishMergedFullOctoMap(const ros::Time& rostime = ros::Time::now()) const;
   void publishCameraOctoMap(const ros::Time& rostime = ros::Time::now()) const;
@@ -194,6 +194,8 @@ protected:
   bool m_publishCameraMap;
   bool m_publishCameraView;
   bool m_publishNeighborMaps;
+  bool m_adjustAgent;
+  int m_displayColor;
 
   bool m_removeCeiling;
   int m_removeCeilingDepth;
@@ -205,12 +207,12 @@ protected:
 
   bool m_enableTraversability;
   bool m_enableTraversabilitySharing;
-  bool m_enableTraversabilityMarkers;
 
   // Diff parameters
   int diff_threshold;
   double diff_duration;
   unsigned num_diffs;
+  bool m_diffMerged;
   char next_idx;
   std::map<std::string, std::vector<int>> seqs;
   std::map<std::string, char> idx;

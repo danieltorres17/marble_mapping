@@ -117,10 +117,10 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_nh_private.param("diff_threshold", diff_threshold, 1000);
   // How many seconds to check/publish diffs
   m_nh_private.param("diff_duration", diff_duration, 10.0);
+  m_nh_private.param("diff_merged", m_diffMerged, false);
 
   m_nh_private.param("enable_traversability", m_enableTraversability, false);
   m_nh_private.param("enable_traversability_sharing", m_enableTraversabilitySharing, false);
-  m_nh_private.param("enable_traversability_markers", m_enableTraversabilityMarkers, false);
 
   if (m_filterGroundPlane && (m_pointcloudMinZ > 0.0 || m_pointcloudMaxZ < 0.0)){
     ROS_WARN_STREAM("You enabled ground filtering but incoming pointclouds will be pre-filtered in ["
@@ -208,6 +208,7 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_nh_private.param("publish_point_cloud", m_publishPointCloud, false);
   m_nh_private.param("publish_point_cloud_diff", m_publishPointCloudDiff, false);
   m_nh_private.param("publish_neighbor_maps", m_publishNeighborMaps, false);
+  m_nh_private.param("display_color", m_displayColor, 1);
 
   m_nh_private.param("latch", m_latchedTopics, m_latchedTopics);
 
@@ -226,6 +227,9 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   if (m_input == 1) pclInput = true;
   else if (m_input == 2) octomapInput = true;
   else if (m_input == 3) diffInput = true;
+  // To get full marker colors need to reduce the agent by one if we don't have a self map
+  if ((m_input == 0) || (m_input == 3)) m_adjustAgent = true;
+  else m_adjustAgent = false;
 
   // Normal octomap format map publishers
   if (pclInput) {
@@ -824,28 +828,23 @@ void MarbleMapping::mergeNeighbors() {
     // If clear passed then re-merge everything
     if (neighbors.clear) {
       if (i == 0) {
-        // Copy any nodes that are self nodes
+        // Delete any nodes that are not self nodes
         boost::mutex::scoped_lock lock(m_mtx);
-        RoughOcTreeT* new_tree = new RoughOcTreeT(m_mres);
-        new_tree->setRoughEnabled(m_enableTraversability);
-        new_tree->setProbHit(m_merged_tree->getProbHit());
-        new_tree->setProbMiss(m_merged_tree->getProbMiss());
-        new_tree->setClampingThresMin(m_merged_tree->getClampingThresMin());
-        new_tree->setClampingThresMax(m_merged_tree->getClampingThresMax());
-        new_tree->enableChangeDetection(true);
-
-        for (RoughOcTreeT::leaf_iterator it = m_merged_tree->begin_leafs();
-            it != m_merged_tree->end_leafs(); ++it) {
-          if (it->getAgent() == 1) {
-            RoughOcTreeNode *newNode = m_merged_tree->setNodeValue(it.getKey(), it->getLogOdds());
-            newNode->setAgent(1);
-            if (m_enableTraversability) {
-              newNode->setRough(it->getRough());
+        bool node_deleted = true;
+        // Have to keep iterating the tree because it randomly leaves strays for some reason
+        while (node_deleted) {
+          node_deleted = false;
+          for (RoughOcTreeT::leaf_iterator it = m_merged_tree->begin_leafs();
+              it != m_merged_tree->end_leafs(); ++it) {
+            if (it->getAgent() != 1) {
+              m_merged_tree->deleteNode(it.getKey());
+              node_deleted = true;
             }
           }
         }
-        // Move the tree back
-        m_merged_tree = new_tree;
+        // Might as well prune here
+        m_merged_tree->prune();
+        m_merged_tree->resetChangeDetection();
       }
       // For each neighbor, clear the diffs
       seqs[nid.data()].clear();
@@ -866,7 +865,7 @@ void MarbleMapping::mergeNeighbors() {
 
       // Only merge if we haven't already merged this sequence
       if (!exists) {
-        // Add to our list of sequences, and get a unique timestamp for this neighbor
+        // Add to our list of sequences, and get a unique agent id for this neighbor
         seqs[nid.data()].push_back(cur_seq);
         if (idx[nid.data()])
           agent = idx[nid.data()];
@@ -893,6 +892,7 @@ void MarbleMapping::mergeNeighbors() {
         // Iterate through the diff tree and merge
         ntree->expand();
         boost::mutex::scoped_lock lock(m_mtx);
+        if (!m_diffMerged) m_merged_tree->enableChangeDetection(false);
         for (RoughOcTreeT::leaf_iterator it = ntree->begin_leafs(), end = ntree->end_leafs();
             it != end; ++it) {
           OcTreeKey nodeKey = it.getKey();
@@ -910,10 +910,7 @@ void MarbleMapping::mergeNeighbors() {
               // If there's already a node in the merged map, but it's from another neighbor,
               // or it's been previously merged, merge the value, and set agent to merged
               // Update based on occupancy seems to work better than getLogOdds
-              if (it->getLogOdds() >= 0)
-                m_merged_tree->updateNode(nodeKey, true);
-              else
-                m_merged_tree->updateNode(nodeKey, false);
+              m_merged_tree->updateNode(nodeKey, it->getLogOdds() >= 0);
               nodeM->setAgent(0);
               if (m_enableTraversabilitySharing) {
                 m_merged_tree->integrateNodeRough(nodeKey, it->getRough());
@@ -939,6 +936,7 @@ void MarbleMapping::mergeNeighbors() {
             }
           }
         }
+        if (!m_diffMerged) m_merged_tree->enableChangeDetection(true);
       }
     }
   }
@@ -968,6 +966,12 @@ void MarbleMapping::publishOptionalMaps(const ros::TimerEvent& event) {
     // each array stores all cubes of a different size, one for each depth level:
     freeNodesVis.markers.resize(m_treeDepth+1);
     occupiedNodesVis.markers.resize(m_treeDepth+1);
+
+    double minX, minY, minZ, maxX, maxY, maxZ;
+    m_merged_tree->getMetricMin(minX, minY, minZ);
+    m_merged_tree->getMetricMax(maxX, maxY, maxZ);
+    // Make sure the bottom is a little lower to drastic color changes at the beginning
+    minZ = std::min(-1.0, minZ);
 
     // now, traverse all leafs in the tree:
     for (RoughOcTreeT::iterator it = m_merged_tree->begin(m_maxTreeDepth),
@@ -1003,15 +1007,15 @@ void MarbleMapping::publishOptionalMaps(const ros::TimerEvent& event) {
 
             occupiedNodesVis.markers[idx].points.push_back(cubeCenter);
 
-            if (m_enableTraversabilityMarkers) {
+            if (m_displayColor == 1) {
+              RGBColor _color = it->getAgentColor(cubeCenter.z, minZ, maxZ, m_adjustAgent);
+              std_msgs::ColorRGBA _color_msg; _color_msg.r = _color.r; _color_msg.g = _color.g; _color_msg.b = _color.b; _color_msg.  a = 1.0f;
+              occupiedNodesVis.markers[idx].colors.push_back(_color_msg);
+            } else if (m_displayColor == 2) {
               RGBColor _color = it->getRoughColor();
               std_msgs::ColorRGBA _color_msg; _color_msg.r = _color.r; _color_msg.g = _color.g; _color_msg.b = _color.b; _color_msg.  a = 1.0f;
               occupiedNodesVis.markers[idx].colors.push_back(_color_msg);
             } else {
-              double minX, minY, minZ, maxX, maxY, maxZ;
-              m_merged_tree->getMetricMin(minX, minY, minZ);
-              m_merged_tree->getMetricMax(maxX, maxY, maxZ);
-
               double h = (1.0 - std::min(std::max((cubeCenter.z-minZ)/ (maxZ - minZ), 0.0), 1.0)) *m_colorFactor;
               occupiedNodesVis.markers[idx].colors.push_back(heightMapColor(h));
             }
@@ -1129,11 +1133,27 @@ void MarbleMapping::publishOctoMaps(const ros::TimerEvent& event) {
   bool publishBinaryMap = (m_binaryMapPub.getNumSubscribers() > 0);
   bool publishFullMap = (m_fullMapPub.getNumSubscribers() > 0);
 
-  if (publishBinaryMap)
-    publishBinaryOctoMap(rostime);
+  if (publishBinaryMap || publishFullMap) {
+    // For now copy the map with only self nodes.  Tried to just write self nodes in RoughOcTree, but causes issues
+    RoughOcTreeT* self_tree = new RoughOcTree(m_mres);
+    {
+      boost::mutex::scoped_lock lock(m_mtx);
+      for (RoughOcTreeT::leaf_iterator it = m_merged_tree->begin_leafs(); it != m_merged_tree->end_leafs(); ++it) {
+        if (it->getAgent() == 1) {
+          RoughOcTreeNode *newNode = self_tree->setNodeValue(it.getKey(), it->getLogOdds());
+          newNode->setAgent(1);
+          newNode->setRough(it->getRough());
+        }
+      }
+    }
+    if (publishBinaryMap)
+      publishBinaryOctoMap(*self_tree, rostime);
 
-  if (publishFullMap)
-    publishFullOctoMap(rostime);
+    if (publishFullMap)
+      publishFullOctoMap(*self_tree, rostime);
+
+    delete self_tree;
+  }
 
   if (publishMergedBinaryMap)
     publishMergedBinaryOctoMap(rostime);
@@ -1190,7 +1210,7 @@ bool MarbleMapping::resetSrv(std_srvs::Empty::Request& req, std_srvs::Empty::Res
   m_merged_tree->clear();
   ROS_INFO("Cleared octomap");
 
-  publishBinaryOctoMap(rostime);
+  publishMergedBinaryOctoMap(rostime);
   for (unsigned i= 0; i < occupiedNodesVis.markers.size(); ++i){
 
     occupiedNodesVis.markers[i].header.frame_id = m_worldFrameId;
@@ -1220,28 +1240,25 @@ bool MarbleMapping::resetSrv(std_srvs::Empty::Request& req, std_srvs::Empty::Res
   return true;
 }
 
-void MarbleMapping::publishBinaryOctoMap(const ros::Time& rostime) const{
+void MarbleMapping::publishBinaryOctoMap(RoughOcTreeT& self_tree, const ros::Time& rostime) const{
 
   Octomap map;
   map.header.frame_id = m_worldFrameId;
   map.header.stamp = rostime;
 
-  // TODO make a new publisher to extract only agent nodes
-  boost::mutex::scoped_lock lock(m_mtx);
-  if (octomap_msgs::binaryMapToMsg(*m_merged_tree, map))
+  if (octomap_msgs::binaryMapToMsg(self_tree, map))
     m_binaryMapPub.publish(map);
   else
     ROS_ERROR("Error serializing OctoMap");
 }
 
-void MarbleMapping::publishFullOctoMap(const ros::Time& rostime) const{
+void MarbleMapping::publishFullOctoMap(RoughOcTreeT& self_tree, const ros::Time& rostime) const{
 
   Octomap map;
   map.header.frame_id = m_worldFrameId;
   map.header.stamp = rostime;
 
-  boost::mutex::scoped_lock lock(m_mtx);
-  if (octomap_msgs::fullMapToMsg(*m_merged_tree, map))
+  if (octomap_msgs::fullMapToMsg(self_tree, map))
     m_fullMapPub.publish(map);
   else
     ROS_ERROR("Error serializing OctoMap");
@@ -1478,6 +1495,7 @@ void MarbleMapping::reconfigureCallback(marble_mapping::MarbleMappingConfig& con
       m_maxRange                  = config.sensor_model_max_range;
       m_merged_tree->setClampingThresMin(config.sensor_model_min);
       m_merged_tree->setClampingThresMax(config.sensor_model_max);
+      m_displayColor = config.display_color;
 
      // Checking values that might create unexpected behaviors.
       if (is_equal(config.sensor_model_hit, 1.0))

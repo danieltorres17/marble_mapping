@@ -19,8 +19,6 @@
   <arg name="enable_traversability" default="false" />
   <!-- Enable sharing of traversability info between agents for global terrain-aware planning  -->
   <arg name="enable_traversability_sharing" default="false" />
-  <!-- Use traversability style markers instead of regular octomap colored markers -->
-  <arg name="enable_traversability_markers" default="true" />
 
   <!-- Performance Tuning Options-->
   <!-- Whether to prune maps as they're created.  Expensive on big maps! -->
@@ -58,10 +56,12 @@
   <!-- Whether to publish the marker arrays and point cloud -->
   <arg name="publish_marker_array" default="true" />
   <arg name="publish_free_space" default="false" />
-  <arg name="publish_point_cloud" default="false" />
+  <arg name="publish_point_cloud" default="true" />
   <arg name="publish_point_cloud_diff" default="false" />
   <!-- Whether to publish neighbor maps to neighbors/VEHICLE/map -->
   <arg name="publish_neighbor_maps" default="false" />
+  <!-- Which color mode to use for map publishing.  Options are 1 (agent), 2 (rough), 3 (z-axis) -->
+  <arg name="display_color" default="1" />
   <!-- Whether to remove ceiling from marker arrays and point clouds, and how deep to check -->
   <arg name="remove_ceiling" default="true" />
   <arg name="remove_ceiling_depth" default="4" />
@@ -71,6 +71,8 @@
   <arg name="diff_threshold" default="1000" />
   <!-- How many seconds to publish and reset diff map -->
   <arg name="diff_duration" default="10.0" />
+  <!-- Whether diffs should be based on self map (false) or merged map (true) -->
+  <arg name="diff_merged" default="false" />
   <!-- Remove ground plane occupancy from occupancy grid (boolean)-->
   <arg name="filter_ground" default="false" />
 
@@ -89,7 +91,6 @@
     <param name="sensor_model/min_range" value="$(arg min_range)" />
     <param name="enable_traversability" value="$(arg enable_traversability)" />
     <param name="enable_traversability_sharing" value="$(arg enable_traversability_sharing)" />
-    <param name="enable_traversability_markers" value="$(arg enable_traversability_markers)" />
     <param name="compress_maps" value="$(arg compress_maps)" />
     <param name="enable_radius_outlier_removal" value="$(arg enable_radius_outlier_removal)" />
     <param name="num_threads" value="$(arg num_threads)" />
@@ -113,6 +114,7 @@
     <param name="publish_point_cloud" value="$(arg publish_point_cloud)" />
     <param name="publish_point_cloud_diff" value="$(arg publish_point_cloud_diff)" />
     <param name="publish_neighbor_maps" value="$(arg publish_neighbor_maps)" />
+    <param name="display_color" value="$(arg display_color)" />
 
     <param name="remove_ceiling" value="$(arg remove_ceiling)" />
     <param name="remove_ceiling_depth" value="$(arg remove_ceiling_depth)" />
@@ -120,6 +122,7 @@
     <param name="publish_diffs" value="$(arg publish_diffs)" />
     <param name="diff_threshold" value="$(arg diff_threshold)" />
     <param name="diff_duration" value="$(arg diff_duration)" />
+    <param name="diff_merged" value="$(arg diff_merged)" />
 
     <param name="filter_ground" value="$(arg filter_ground)" />
 

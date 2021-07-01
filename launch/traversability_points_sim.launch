@@ -1,0 +1,180 @@
+<launch>
+    <arg name="vehicle_name"                    default="X1"/>
+
+    <arg name="enable_debug"                    default="false"/>
+    <arg name="enable_inner_crop"               default="true"/>
+    <arg name="enable_outer_crop"               default="false"/>
+    <arg name="enable_voxfilter"                default="false" />
+
+    <arg name="fixed_frame_id"                  default="$(arg vehicle_name)/map"/>
+    <arg name="child_frame_id"                  default="$(arg vehicle_name)/horiz_ouster_link"/>
+    <arg name="output_cloud_topic"              default="octomap_out"/>
+    <arg name="octomap_resolution"              default="0.2"/>
+    <arg name="range"                           default="5.0"/>
+
+    <!-- Main Lidar -->
+    <group>
+        <arg name="cloud_topic"         default="points"/>
+        <!-- CURVY TERRAIN MAPPER -->
+        <include file="$(find curvy_terrain_mapper)/launch/curvy_terrain_mapper.launch">
+            <arg name="fixed_frame_id"                                  value="$(arg fixed_frame_id)"/>
+            <arg name="input_cloud_topic"                               value="$(arg cloud_topic)"/>
+            <arg name="main_cloud_topic"                                value="$(arg cloud_topic)/main_cloud"/>
+            <arg name="cost_cloud_topic"                                value="$(arg cloud_topic)/cost_cloud"/>
+            <arg name="cost_norm_cloud_topic"                           value="$(arg cloud_topic)/cost_norm_cloud"/>
+            <arg name="enable_debug"                                    value="$(arg enable_debug)"/>
+            <arg name="preanalysis/dsFlag"                              value="true"/>
+            <arg name="preanalysis/dsResolution"                        value="0.05"/>
+            <arg name="preanalysis/gpFlag"                              value="false"/>
+            <arg name="preanalysis/gpAngle"                             value="1.0"/>
+            <arg name="preanalysis/pfActive"                            value="false"/>
+            <arg name="preanalysis/fsActive"                            value="false"/>
+            <arg name="preanalysis/dsMethod"                            value="false"/>
+            <arg name="regiongrowing/enable"                            value="false"/>
+            <arg name="costmap/normal_gain"                             value="20.0"/>
+            <arg name="costmap/curv_gain"                               value="2.0"/>
+            <arg name="costmap/min_saturation_cost"                     value="0.0"/>
+            <arg name="costmap/max_saturation_cost"                     value="0.5"/>
+            <arg name="costmap/set_min_saturation_cost_to_min_cost"     value="false"/>
+            <arg name="costmap/set_max_saturation_cost_to_max_cost"     value="false"/>
+        </include>
+    </group>
+
+    <!-- Single realsense for older Husky's -->
+    <group ns="front_down_rgbd_camera/depth">
+        <arg name="cloud_topic"         default="points"/>
+        <!-- CURVY TERRAIN MAPPER -->
+        <include file="$(find curvy_terrain_mapper)/launch/curvy_terrain_mapper.launch">
+            <arg name="fixed_frame_id"                                  value="$(arg fixed_frame_id)"/>
+            <arg name="input_cloud_topic"                               value="$(arg cloud_topic)"/>
+            <arg name="main_cloud_topic"                                value="$(arg cloud_topic)/main_cloud"/>
+            <arg name="cost_cloud_topic"                                value="$(arg cloud_topic)/cost_cloud"/>
+            <arg name="cost_norm_cloud_topic"                           value="$(arg cloud_topic)/cost_norm_cloud"/>
+            <arg name="enable_debug"                                    value="$(arg enable_debug)"/>
+            <arg name="preanalysis/dsFlag"                              value="true"/>
+            <arg name="preanalysis/dsResolution"                        value="0.05"/>
+            <arg name="preanalysis/gpFlag"                              value="false"/>
+            <arg name="preanalysis/gpAngle"                             value="5.0"/>
+            <arg name="preanalysis/pfActive"                            value="false"/>
+            <arg name="preanalysis/fsActive"                            value="false"/>
+            <arg name="preanalysis/dsMethod"                            value="false"/>
+            <arg name="regiongrowing/enable"                            value="false"/>
+            <arg name="costmap/normal_gain"                             value="20.0"/>
+            <arg name="costmap/curv_gain"                               value="2.0"/>
+            <arg name="costmap/min_saturation_cost"                     value="0.0"/>
+            <arg name="costmap/max_saturation_cost"                     value="0.5"/>
+            <arg name="costmap/set_min_saturation_cost_to_min_cost"     value="false"/>
+            <arg name="costmap/set_max_saturation_cost_to_max_cost"     value="false"/>
+        </include>
+    </group>
+
+    <!-- Dual picoflexxes for new Husky -->
+    <group ns="tof_left">
+        <arg name="cloud_topic"         default="points"/>
+        <!-- CURVY TERRAIN MAPPER -->
+        <include file="$(find curvy_terrain_mapper)/launch/curvy_terrain_mapper.launch">
+            <arg name="fixed_frame_id"                                  value="$(arg fixed_frame_id)"/>
+            <arg name="input_cloud_topic"                               value="$(arg cloud_topic)"/>
+            <arg name="main_cloud_topic"                                value="$(arg cloud_topic)/main_cloud"/>
+            <arg name="cost_cloud_topic"                                value="$(arg cloud_topic)/cost_cloud"/>
+            <arg name="cost_norm_cloud_topic"                           value="$(arg cloud_topic)/cost_norm_cloud"/>
+            <arg name="enable_debug"                                    value="$(arg enable_debug)"/>
+            <arg name="preanalysis/dsFlag"                              value="true"/>
+            <arg name="preanalysis/dsResolution"                        value="0.05"/>
+            <arg name="preanalysis/gpFlag"                              value="false"/>
+            <arg name="preanalysis/gpAngle"                             value="5.0"/>
+            <arg name="preanalysis/pfActive"                            value="false"/>
+            <arg name="preanalysis/fsActive"                            value="false"/>
+            <arg name="preanalysis/dsMethod"                            value="false"/>
+            <arg name="regiongrowing/enable"                            value="false"/>
+            <arg name="costmap/normal_gain"                             value="20.0"/>
+            <arg name="costmap/curv_gain"                               value="2.0"/>
+            <arg name="costmap/min_saturation_cost"                     value="0.0"/>
+            <arg name="costmap/max_saturation_cost"                     value="0.5"/>
+            <arg name="costmap/set_min_saturation_cost_to_min_cost"     value="false"/>
+            <arg name="costmap/set_max_saturation_cost_to_max_cost"     value="false"/>
+        </include>
+    </group>
+
+    <group ns="tof_right">
+        <arg name="cloud_topic"         default="points"/>
+        <!-- CURVY TERRAIN MAPPER -->
+        <include file="$(find curvy_terrain_mapper)/launch/curvy_terrain_mapper.launch">
+            <arg name="fixed_frame_id"                                  value="$(arg fixed_frame_id)"/>
+            <arg name="input_cloud_topic"                               value="$(arg cloud_topic)"/>
+            <arg name="main_cloud_topic"                                value="$(arg cloud_topic)/main_cloud"/>
+            <arg name="cost_cloud_topic"                                value="$(arg cloud_topic)/cost_cloud"/>
+            <arg name="cost_norm_cloud_topic"                           value="$(arg cloud_topic)/cost_norm_cloud"/>
+            <arg name="enable_debug"                                    value="$(arg enable_debug)"/>
+            <arg name="preanalysis/dsFlag"                              value="true"/>
+            <arg name="preanalysis/dsResolution"                        value="0.05"/>
+            <arg name="preanalysis/gpFlag"                              value="false"/>
+            <arg name="preanalysis/gpAngle"                             value="5.0"/>
+            <arg name="preanalysis/pfActive"                            value="false"/>
+            <arg name="preanalysis/fsActive"                            value="false"/>
+            <arg name="preanalysis/dsMethod"                            value="false"/>
+            <arg name="regiongrowing/enable"                            value="false"/>
+            <arg name="costmap/normal_gain"                             value="20.0"/>
+            <arg name="costmap/curv_gain"                               value="2.0"/>
+            <arg name="costmap/min_saturation_cost"                     value="0.0"/>
+            <arg name="costmap/max_saturation_cost"                     value="0.5"/>
+            <arg name="costmap/set_min_saturation_cost_to_min_cost"     value="false"/>
+            <arg name="costmap/set_max_saturation_cost_to_max_cost"     value="false"/>
+        </include>
+    </group>
+
+    <!-- Mix all of the point clouds -->
+    <node pkg="topic_tools" type="relay" name="points_relay" args="points/cost_norm_cloud $(arg output_cloud_topic)/mixed" respawn="true"/>
+    <node pkg="topic_tools" type="relay" name="front_down_points_relay" args="front_down_rgbd_camera/depth/points/cost_norm_cloud $(arg output_cloud_topic)/mixed" respawn="true"/>
+    <node pkg="topic_tools" type="relay" name="tof_left_relay" args="tof_left/points/cost_norm_cloud $(arg output_cloud_topic)/mixed" respawn="true"/>
+    <node pkg="topic_tools" type="relay" name="tof_right_relay" args="tof_right/points/cost_norm_cloud $(arg output_cloud_topic)/mixed" respawn="true"/>
+
+    <node pkg="nodelet" type="nodelet" name="voxel_grid_filter_nodelet" args="standalone pcl/VoxelGrid pcl_manager" output="log" if="$(arg enable_voxfilter)" respawn="true">
+        <remap from="~input"                  to="$(arg output_cloud_topic)/mixed" />
+        <remap from="~output"                 to="$(arg output_cloud_topic)/voxfiltered" />
+        <param name="filter_field_name"       value="z"/>
+        <param name="filter_limit_min"        value="-100000"/>
+        <param name="filter_limit_max"        value="100000"/>
+        <param name="filter_limit_negative"   value="false"/>
+        <param name="leaf_size"               value="$(arg octomap_resolution)/2"/>
+    </node>
+    <node pkg="topic_tools" type="relay" name="voxfiltered_relay" args="$(arg output_cloud_topic)/mixed $(arg output_cloud_topic)/voxfiltered" unless="$(arg enable_voxfilter)" respawn="true"/>
+
+    <!-- INNER POINTCLOUD CROP -->
+    <node pkg="nodelet" type="nodelet" name="inner_crop_filter" args="standalone pcl/CropBox" output="screen" if="$(arg enable_inner_crop)" respawn="true">
+    <remap from="~input" to="$(arg output_cloud_topic)/voxfiltered" />
+    <remap from="~output" to="$(arg output_cloud_topic)/inner_cropped" />
+    <param name="input_frame" value="$(arg child_frame_id)" />
+    <param name="output_frame" value="$(arg child_frame_id)" />
+    <rosparam>
+        # true: no points in the box, false: no points outside the box
+        negative: true
+        min_x: -1.0
+        max_x: 0.2
+        min_y: -0.5
+        max_y: 0.5
+        min_z: -0.75
+        max_z: 0.2
+    </rosparam>
+    </node>
+    <node pkg="topic_tools" type="relay" name="inner_crop_relay" args="$(arg output_cloud_topic)/voxfiltered $(arg output_cloud_topic)/inner_cropped" unless="$(arg enable_inner_crop)" respawn="true"/>
+
+    <!-- OUTER POINTCLOUD CROP -->
+    <node pkg="nodelet" type="nodelet" name="outer_crop_filter" args="standalone pcl/CropBox" output="screen" if="$(arg enable_outer_crop)" respawn="true">
+    <remap from="~input" to="$(arg output_cloud_topic)/inner_cropped" />
+    <remap from="~output" to="$(arg output_cloud_topic)" />
+    <param name="input_frame" value="$(arg child_frame_id)" />
+    <param name="output_frame" value="$(arg child_frame_id)" />
+    <rosparam>
+        # true: no points in the box, false: no points outside the box
+        negative: false
+        min_x: -100.0
+        max_x: 100.0
+        min_y: -100.0
+        max_y: 100.0
+        min_z: -100.0
+        max_z: 1.5
+    </rosparam>
+    </node>
+    <node pkg="topic_tools" type="relay" name="outer_crop_relay" args="$(arg output_cloud_topic)/inner_cropped $(arg output_cloud_topic)" unless="$(arg enable_outer_crop)" respawn="true"/>
+</launch>

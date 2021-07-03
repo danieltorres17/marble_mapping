@@ -81,7 +81,7 @@
   <arg name="sensor_model/min" default=".12" />
   <arg name="sensor_model/max" default=".97" />
 
-  <node pkg="marble_mapping" type="marble_mapping_node" name="marble_mapping" output="screen">
+  <node pkg="marble_mapping" type="marble_mapping_node" name="marble_mapping" respawn="true" output="screen">
     <param name="resolution" value="$(arg resolution)" />
     <param name="merged_resolution" value="$(arg merged_resolution)" />
     <param name="frame_id" type="string" value="$(arg frame_id)" />

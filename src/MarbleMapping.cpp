@@ -110,7 +110,7 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_nh_private.param("publish_merged_full", m_publishMergedFullMap, false);
 
   // Enable multiagent functions such as diff creation and merging
-  m_nh_private.param("multiagent", m_multiagent, false);
+  m_nh_private.param("merge_maps", m_mergeMaps, true);
   // Enable diff publishing (diffs are still created)
   m_nh_private.param("publish_diffs", m_publishDiffs, false);
   // Threshold for when to add map diffs
@@ -319,11 +319,9 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
     neighbors.neighbors[0].octomaps.push_back(octomap_msgs::Octomap());
   }
 
-  if (m_multiagent) {
-    m_neighborsSub = m_nh.subscribe("neighbor_maps", 100, &MarbleMapping::neighborMapsCallback, this);
-    // Timer for updating the local map diff that will be broadcast
-    diff_timer = m_nh.createTimer(ros::Duration(diff_duration), &MarbleMapping::updateDiff, this);
-  }
+  m_neighborsSub = m_nh.subscribe("neighbor_maps", 100, &MarbleMapping::neighborMapsCallback, this);
+  // Timer for updating the local map diff that will be broadcast
+  diff_timer = m_nh.createTimer(ros::Duration(diff_duration), &MarbleMapping::updateDiff, this);
 
   // Timer for publishing the OctoMaps
   ros::TimerOptions ops_pub;
@@ -417,8 +415,9 @@ bool MarbleMapping::openFile(const std::string& filename){
 void MarbleMapping::neighborMapsCallback(const marble_mapping::OctomapNeighborsConstPtr& msg) {
   neighbors = *msg;
 
-  // If hard reset passed, start the self and merged map over!
+  // If hard reset passed, start the map over!
   if (neighbors.hardReset) {
+    ROS_INFO("Hard resetting map due to request.");
     boost::mutex::scoped_lock lock(m_mtx);
     m_merged_tree->clear();
     m_merged_tree->resetChangeDetection();
@@ -428,7 +427,8 @@ void MarbleMapping::neighborMapsCallback(const marble_mapping::OctomapNeighborsC
 
   // Better to put this somewhere else, but the callback should be infrequent enough this is ok
   try {
-    mergeNeighbors();
+    if (m_mergeMaps)
+      mergeNeighbors();
   } catch (const std::exception& e) {
     ROS_ERROR("merging error! %s", e.what());
   }
@@ -461,14 +461,6 @@ void MarbleMapping::octomapDiffsCallback(const octomap_msgs::OctomapConstPtr& ms
     boost::mutex::scoped_lock lock(m_mtx);
     m_merged_tree->prune();
   }
-
-  // Publish the binary maps
-  // ros::Time rostime = ros::Time::now();
-  // if (m_publishMergedBinaryMap)
-  //   publishMergedBinaryOctoMap(rostime);
-  //
-  // if (m_publishNeighborMaps)
-  //   publishNeighborMaps(rostime);
 }
 
 void MarbleMapping::insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr& cloud){
@@ -809,7 +801,7 @@ void MarbleMapping::updateDiff(const ros::TimerEvent& event) {
     pclCountProcessed = 0;
     pclDropped = 0;
     longTimeDiff = ros::Duration(0.0);
-  } else {
+  } else if (pclCount > 0) {
     ROS_INFO("Processed %d clouds", pclCountProcessed);
     pclCount = 0;
     pclCountProcessed = 0;
@@ -827,23 +819,28 @@ void MarbleMapping::mergeNeighbors() {
 
     // If clear passed then re-merge everything
     if (neighbors.clear) {
+      ROS_INFO("Clearing data for %s", nid.data());
       if (i == 0) {
         // Delete any nodes that are not self nodes
         boost::mutex::scoped_lock lock(m_mtx);
-        bool node_deleted = true;
-        // Have to keep iterating the tree because it randomly leaves strays for some reason
-        while (node_deleted) {
-          node_deleted = false;
-          for (RoughOcTreeT::leaf_iterator it = m_merged_tree->begin_leafs();
-              it != m_merged_tree->end_leafs(); ++it) {
-            if (it->getAgent() != 1) {
-              m_merged_tree->deleteNode(it.getKey());
-              node_deleted = true;
+        if (m_input == 1) {
+          bool node_deleted = true;
+          // Have to keep iterating the tree because it randomly leaves strays for some reason
+          while (node_deleted) {
+            node_deleted = false;
+            for (RoughOcTreeT::leaf_iterator it = m_merged_tree->begin_leafs();
+                it != m_merged_tree->end_leafs(); ++it) {
+              if (it->getAgent() != 1) {
+                m_merged_tree->deleteNode(it.getKey());
+                node_deleted = true;
+              }
             }
           }
+          // Might as well prune here
+          m_merged_tree->prune();
+        } else {
+          m_merged_tree->clear();
         }
-        // Might as well prune here
-        m_merged_tree->prune();
         m_merged_tree->resetChangeDetection();
       }
       // For each neighbor, clear the diffs
@@ -853,6 +850,7 @@ void MarbleMapping::mergeNeighbors() {
 
     // Initialize neighbor map data if enabled
     if (m_publishNeighborMaps && !neighbor_maps[nid.data()]) {
+      ROS_INFO("Adding neighbor map %s", nid.data());
       neighbor_maps[nid.data()] = new RoughOcTreeT(m_mres);
       neighbor_updated[nid.data()] = false;
       neighbor_pubs[nid.data()] = m_nh.advertise<Octomap>("neighbors/"+nid+"/map", 1, m_latchedTopics);
@@ -898,14 +896,16 @@ void MarbleMapping::mergeNeighbors() {
           OcTreeKey nodeKey = it.getKey();
           RoughOcTreeNode *nodeM = m_merged_tree->search(nodeKey);
           if (nodeM != NULL) {
-            if (overwrite_node && (nodeM->getAgent() == agent)) {
-              // If the diff is newer, and the merge node came from this neighbor
-              // replace the value and maintain the timestamp id
-              m_merged_tree->setNodeValue(nodeKey, it->getLogOdds());
-              nodeM->setAgent(agent);
-              if (m_enableTraversabilitySharing) {
-                nodeM->setRough(it->getRough());
-              }
+            if (nodeM->getAgent() == agent) {
+              if (overwrite_node) {
+                // If the diff is newer, and the merged map node came from this neighbor
+                // replace the value and maintain the agent id
+                m_merged_tree->setNodeValue(nodeKey, it->getLogOdds());
+                nodeM->setAgent(agent);
+                if (m_enableTraversabilitySharing) {
+                  nodeM->setRough(it->getRough());
+                }
+              } // If it's an older node from the same agent, just ignore it
             } else if ((nodeM->getAgent() == 0) || (nodeM->getAgent() != 1)) {
               // If there's already a node in the merged map, but it's from another neighbor,
               // or it's been previously merged, merge the value, and set agent to merged

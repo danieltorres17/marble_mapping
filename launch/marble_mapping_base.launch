@@ -7,7 +7,7 @@
   <!-- Fixed map frame (set to 'map' if SLAM or localization running!) -->
   <arg name="frame_id" default="world" />
   <!-- Enable multiagent processing, such as diff creation and merging -->
-  <arg name="multiagent" default="true" />
+  <arg name="merge_maps" default="true" />
   <!-- Input type: 0=none, 1=pointcloud, 2=octomap -->
   <arg name="input" default="0" />
   <!-- Data source to integrate (PointCloud2) -->
@@ -72,7 +72,7 @@
     <param name="resolution" value="$(arg resolution)" />
     <param name="merged_resolution" value="$(arg merged_resolution)" />
     <param name="frame_id" type="string" value="$(arg frame_id)" />
-    <param name="multiagent" value="$(arg multiagent)" />
+    <param name="merge_maps" value="$(arg merge_maps)" />
     <param name="input" value="$(arg input)" />
     <param name="sensor_model/max_range" value="$(arg max_range)" />
     <param name="enable_traversability" value="$(arg enable_traversability)" />

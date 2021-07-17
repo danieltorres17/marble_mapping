@@ -182,7 +182,7 @@ protected:
 
   double pub_duration;
   double pub_opt_duration;
-  bool m_multiagent;
+  bool m_mergeMaps;
   bool m_latchedTopics;
   bool m_publishDiffs;
   bool m_publishMarkerArray;

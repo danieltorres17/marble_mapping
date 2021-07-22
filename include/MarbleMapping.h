@@ -100,8 +100,8 @@ public:
 
 protected:
   void reconfigureCallback(marble_mapping::MarbleMappingConfig& config, uint32_t level);
-  void publishBinaryOctoMap(RoughOcTreeT& self_tree, const ros::Time& rostime = ros::Time::now()) const;
-  void publishFullOctoMap(RoughOcTreeT& self_tree, const ros::Time& rostime = ros::Time::now()) const;
+  void publishBinaryOctoMap(const ros::Time& rostime = ros::Time::now()) const;
+  void publishFullOctoMap(const ros::Time& rostime = ros::Time::now()) const;
   void publishMergedBinaryOctoMap(const ros::Time& rostime = ros::Time::now()) const;
   void publishMergedFullOctoMap(const ros::Time& rostime = ros::Time::now()) const;
   void publishCameraOctoMap(const ros::Time& rostime = ros::Time::now()) const;
@@ -182,6 +182,9 @@ protected:
 
   double pub_duration;
   double pub_opt_duration;
+  bool m_octree_updated;
+  bool m_mtree_updated;
+  bool m_mtree_markers_updated;
   bool m_mergeMaps;
   bool m_latchedTopics;
   bool m_publishDiffs;
@@ -195,6 +198,8 @@ protected:
   bool m_publishCameraView;
   bool m_publishNeighborMaps;
   bool m_adjustAgent;
+  int m_lastSub;
+  int m_lastMarkerSub;
   int m_displayColor;
 
   bool m_removeCeiling;

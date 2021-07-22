@@ -15,7 +15,7 @@
   <!-- Maximum range to integrate (speedup!) -->
   <arg name="max_range" default="7.0" />
   <!-- Enable traversability info to be integrated into occupied cells from intensity channel of input pointcloud -->
-  <arg name="enable_traversability" default="true" />
+  <arg name="enable_traversability" default="false" />
   <!-- Enable sharing of traversability info between agents for global terrain-aware planning  -->
   <arg name="enable_traversability_sharing" default="false" />
   <!-- Whether to prune maps as they're created.  Expensive on big maps! -->
@@ -65,7 +65,7 @@
 
   <arg name="sensor_model/hit" default=".95" />
   <arg name="sensor_model/miss" default=".48" />
-  <arg name="sensor_model/min" default=".12" />
+  <arg name="sensor_model/min" default=".10" />
   <arg name="sensor_model/max" default=".97" />
 
   <node pkg="marble_mapping" type="marble_mapping_node" name="marble_mapping" output="screen">

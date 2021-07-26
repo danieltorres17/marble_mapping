@@ -751,10 +751,18 @@ void MarbleMapping::insertScan(const tf::StampedTransform& sensorToWorldTf, cons
 }
 
 template <class OcTreeMT>
-int MarbleMapping::updateDiffTree(OcTreeMT* tree, PCLPointCloud& pclDiffCloud) {
+int MarbleMapping::updateDiffTree(OcTreeMT* tree, PCLPointCloudRGB& pclDiffCloud) {
   // Find all changed nodes since last update and create a new octomap
   KeyBoolMap::const_iterator startPnt = tree->changedKeysBegin();
   KeyBoolMap::const_iterator endPnt = tree->changedKeysEnd();
+
+  double minZ, maxZ;
+  if (m_publishPointCloudDiff) {
+    double minX, minY, maxX, maxY;
+    tree->getMetricMin(minX, minY, minZ);
+    tree->getMetricMax(maxX, maxY, maxZ);
+    minZ = std::min(-1.0, minZ);
+  }
 
   int num_nodes = 0;
   for (KeyBoolMap::const_iterator iter = startPnt; iter != endPnt; ++iter) {
@@ -772,11 +780,15 @@ int MarbleMapping::updateDiffTree(OcTreeMT* tree, PCLPointCloud& pclDiffCloud) {
       // Create a point cloud diff if enabled
       if ((m_publishPointCloudDiff) && (node->getLogOdds() >= 0)) {
         point3d point = tree->keyToCoord(iter->first);
-        PCLPoint pcpoint;
+        PCLPointRGB pcpoint;
         pcpoint.x = point.x();
         pcpoint.y = point.y();
         pcpoint.z = point.z();
-        pcpoint.intensity = node->getRough();
+        RGBColor _color = node->getAgentColor(pcpoint.z, minZ, maxZ, m_adjustAgent);
+        pcpoint.r = _color.r * 255;
+        pcpoint.g = _color.g * 255;
+        pcpoint.b = _color.b * 255;
+
         pclDiffCloud.push_back(pcpoint);
       }
     }
@@ -787,7 +799,7 @@ int MarbleMapping::updateDiffTree(OcTreeMT* tree, PCLPointCloud& pclDiffCloud) {
 
 void MarbleMapping::updateDiff(const ros::TimerEvent& event) {
   // TODO Add a check to see if we're in comm with anyone, and if not, don't update the diff
-  PCLPointCloud pclDiffCloud;
+  PCLPointCloudRGB pclDiffCloud;
   int num_nodes;
 
   // Update the diff tree from either the merged map or self map

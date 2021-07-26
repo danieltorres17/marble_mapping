@@ -80,7 +80,9 @@ class MarbleMapping {
 
 public:
   typedef pcl::PointXYZI PCLPoint;
+  typedef pcl::PointXYZRGB PCLPointRGB;
   typedef pcl::PointCloud<PCLPoint> PCLPointCloud;
+  typedef pcl::PointCloud<PCLPointRGB> PCLPointCloudRGB;
   typedef octomap::OcTree OcTreeT;
   typedef octomap::RoughOcTree RoughOcTreeT;
   typedef octomap_msgs::GetOctomap OctomapSrv;
@@ -121,7 +123,7 @@ protected:
 
   // Check the changes since last run to publish for sharing to other agents
   template <class OcTreeMT>
-  int updateDiffTree(OcTreeMT* tree, PCLPointCloud& pclDiffCloud);
+  int updateDiffTree(OcTreeMT* tree, PCLPointCloudRGB& pclDiffCloud);
   void updateDiff(const ros::TimerEvent& event);
 
   // Merge all neighbor maps

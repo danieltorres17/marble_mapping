@@ -431,6 +431,22 @@ bool MarbleMapping::openFile(const std::string& filename){
 void MarbleMapping::neighborMapsCallback(const marble_mapping::OctomapNeighborsConstPtr& msg) {
   neighbors = *msg;
 
+  // Neighbor Maps array gets corrupted occasionally during publishing for an unknown reason
+  // If that happens, just ignore any reset or clear commands from this message
+  bool invalidMessage = (neighbors.num_neighbors != neighbors.neighbors.size());
+  if (!invalidMessage) {
+    for (int i = 0; i < msg->neighbors.size(); i++) {
+      if (neighbors.neighbors[i].num_octomaps != neighbors.neighbors[i].octomaps.size())
+        invalidMessage = true;
+    }
+  }
+
+  if (invalidMessage) {
+    ROS_WARN("Received invalid neighbor maps!");
+    neighbors.hardReset = false;
+    neighbors.clear = false;
+  }
+
   // If hard reset passed, start the self and merged map over!
   if (neighbors.hardReset) {
     ROS_INFO("Hard resetting map due to request.");
@@ -723,7 +739,7 @@ void MarbleMapping::insertScan(const tf::StampedTransform& sensorToWorldTf, cons
       point3d point = m_octree->keyToCoord(*it);
       RoughOcTreeNode *oNode = m_octree->updateNode(*it, false);
       // Update the merged map.  Using the coordinate allows for different resolutions
-      RoughOcTreeNode *newNode = m_merged_tree->updateNode(point, false);
+      RoughOcTreeNode *newNode = m_merged_tree->setNodeValue(point, oNode->getValue());
       newNode->setAgent(1);
       if (m_enableTraversability) {
         newNode->setRough(oNode->getRough());
@@ -739,7 +755,7 @@ void MarbleMapping::insertScan(const tf::StampedTransform& sensorToWorldTf, cons
   for (KeySet::iterator it = occupied_cells.begin(), end=occupied_cells.end(); it!= end; it++) {
     point3d point = m_octree->keyToCoord(*it);
     RoughOcTreeNode *oNode = m_octree->updateNode(*it, true);
-    RoughOcTreeNode *newNode = m_merged_tree->updateNode(point, true);
+    RoughOcTreeNode *newNode = m_merged_tree->setNodeValue(point, oNode->getValue());
     newNode->setAgent(1);
     if (m_enableTraversability) {
       newNode->setRough(oNode->getRough());
@@ -868,7 +884,7 @@ void MarbleMapping::mergeNeighbors() {
   bool remerge;
   char agent;
 
-  for (int i=0; i < neighbors.num_neighbors; i++) {
+  for (int i=0; i < neighbors.neighbors.size(); i++) {
     std::string nid = neighbors.neighbors[i].owner;
 
     // If clear passed then re-merge everything

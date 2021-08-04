@@ -23,6 +23,8 @@
   <!-- Performance Tuning Options-->
   <!-- Whether to prune maps as they're created.  Expensive on big maps! -->
   <arg name="compress_maps" default="false" />
+  <!-- Use passthrough filter.  Use pointcloud_min/max_* to set limits  -->
+  <arg name="passthrough_filter" default="false" />
   <!-- Whether to remove outliers in the PCL.  Big performance hit! -->
   <arg name="enable_radius_outlier_removal" default="false" />
   <!-- Number of threads to use for PCL processing. Setting '0' or a value greater than
@@ -92,6 +94,7 @@
     <param name="enable_traversability" value="$(arg enable_traversability)" />
     <param name="enable_traversability_sharing" value="$(arg enable_traversability_sharing)" />
     <param name="compress_maps" value="$(arg compress_maps)" />
+    <param name="passthrough_filter" value="$(arg passthrough_filter)" />
     <param name="enable_radius_outlier_removal" value="$(arg enable_radius_outlier_removal)" />
     <param name="num_threads" value="$(arg num_threads)" />
     <param name="downsample_size" value="$(arg downsample_size)" />

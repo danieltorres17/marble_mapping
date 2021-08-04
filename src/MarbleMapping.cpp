@@ -82,7 +82,8 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_nh_private.param("occupancy_max_z", m_occupancyMaxZ,m_occupancyMaxZ);
 
   m_nh_private.param("compress_maps", m_compressMaps, true);
-  m_nh_private.param("enable_radius_outlier_removal", m_enable_radius_outlier_removal, false);
+  m_nh_private.param("passthrough_filter", m_passthroughFilter, true);
+  m_nh_private.param("enable_radius_outlier_removal", m_enableRadiusOutlierRemoval, false);
   m_nh_private.param("num_threads", m_numThreads, 1);
   m_nh_private.param("downsample_size", m_downsampleSize, 0.0);
   m_nh_private.param("pcl_time_limit", m_pclTimeLimit, 100.0);
@@ -357,6 +358,7 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   pclCount = 0;
   pclCountProcessed = 0;
   pclDropped = 0;
+  pclTime = 0;
 
   dynamic_reconfigure::Server<MarbleMappingConfig>::CallbackType f;
   f = boost::bind(&MarbleMapping::reconfigureCallback, this, _1, _2);
@@ -552,14 +554,16 @@ void MarbleMapping::insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr
 
   // set up filter for height range, also removes NANs:
   pcl::PassThrough<PCLPoint> pass_x;
-  pass_x.setFilterFieldName("x");
-  pass_x.setFilterLimits(m_pointcloudMinX, m_pointcloudMaxX);
   pcl::PassThrough<PCLPoint> pass_y;
-  pass_y.setFilterFieldName("y");
-  pass_y.setFilterLimits(m_pointcloudMinY, m_pointcloudMaxY);
   pcl::PassThrough<PCLPoint> pass_z;
-  pass_z.setFilterFieldName("z");
-  pass_z.setFilterLimits(m_pointcloudMinZ, m_pointcloudMaxZ);
+  if (m_passthroughFilter) {
+    pass_x.setFilterFieldName("x");
+    pass_x.setFilterLimits(m_pointcloudMinX, m_pointcloudMaxX);
+    pass_y.setFilterFieldName("y");
+    pass_y.setFilterLimits(m_pointcloudMinY, m_pointcloudMaxY);
+    pass_z.setFilterFieldName("z");
+    pass_z.setFilterLimits(m_pointcloudMinZ, m_pointcloudMaxZ);
+  }
 
   PCLPointCloud pc_ground; // segmented ground plane
   PCLPointCloud pc_nonground; // everything else
@@ -570,8 +574,6 @@ void MarbleMapping::insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr
       m_tfListener.waitForTransform(m_baseFrameId, cloud->header.frame_id, cloud->header.stamp, ros::Duration(0.2));
       m_tfListener.lookupTransform(m_baseFrameId, cloud->header.frame_id, cloud->header.stamp, sensorToBaseTf);
       m_tfListener.lookupTransform(m_worldFrameId, m_baseFrameId, cloud->header.stamp, baseToWorldTf);
-
-
     }catch(tf::TransformException& ex){
       ROS_ERROR_STREAM( "Transform error for ground plane filter: " << ex.what() << ", quitting callback.\n"
                         "You need to set the base_frame_id or disable filter_ground.");
@@ -584,12 +586,16 @@ void MarbleMapping::insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr
 
     // transform pointcloud from sensor frame to fixed robot frame
     pcl::transformPointCloud(pc, pc, sensorToBase);
-    pass_x.setInputCloud(pc.makeShared());
-    pass_x.filter(pc);
-    pass_y.setInputCloud(pc.makeShared());
-    pass_y.filter(pc);
-    pass_z.setInputCloud(pc.makeShared());
-    pass_z.filter(pc);
+
+    if (m_passthroughFilter) {
+      pass_x.setInputCloud(pc.makeShared());
+      pass_x.filter(pc);
+      pass_y.setInputCloud(pc.makeShared());
+      pass_y.filter(pc);
+      pass_z.setInputCloud(pc.makeShared());
+      pass_z.filter(pc);
+    }
+
     filterGroundPlane(pc, pc_ground, pc_nonground);
 
     // transform clouds to world frame for insertion
@@ -600,15 +606,17 @@ void MarbleMapping::insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr
     pcl::transformPointCloud(pc, pc, sensorToWorld);
 
     // just filter height range:
-    pass_x.setInputCloud(pc.makeShared());
-    pass_x.filter(pc);
-    pass_y.setInputCloud(pc.makeShared());
-    pass_y.filter(pc);
-    pass_z.setInputCloud(pc.makeShared());
-    pass_z.filter(pc);
+    if (m_passthroughFilter) {
+      pass_x.setInputCloud(pc.makeShared());
+      pass_x.filter(pc);
+      pass_y.setInputCloud(pc.makeShared());
+      pass_y.filter(pc);
+      pass_z.setInputCloud(pc.makeShared());
+      pass_z.filter(pc);
+    }
 
     // Remove any spurious points that still exist if we're filtering minrange
-    if (m_enable_radius_outlier_removal) {
+    if (m_enableRadiusOutlierRemoval) {
       pcl::RadiusOutlierRemoval<PCLPoint> outrem;
       // build the filter
       outrem.setInputCloud(pc.makeShared());
@@ -637,6 +645,7 @@ void MarbleMapping::insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr
   ROS_DEBUG("Pointcloud insertion in MarbleMapping done (%zu+%zu pts (ground/nonground), %f sec)", pc_ground.size(), pc_nonground.size(), total_elapsed);
 
   pclCountProcessed++;
+  pclTime += total_elapsed;
   m_octree_updated = true;
   m_mtree_updated = true;
   m_mtree_markers_updated = true;
@@ -866,15 +875,17 @@ void MarbleMapping::updateDiff(const ros::TimerEvent& event) {
   // Stats on dropped clouds
   if (pclDropped > 0) {
     double dropped = (double)pclDropped / (double)pclCount * 100.0;
-    ROS_INFO("Dropped %.1f%% of clouds.  Largest delay was %.2f seconds. Processed %d clouds.", dropped, longTimeDiff.toSec(), pclCountProcessed);
-    pclCount = 0;
-    pclCountProcessed = 0;
+    ROS_INFO("Dropped %.1f%% of clouds.  Largest delay was %.2f seconds.", dropped, longTimeDiff.toSec());
     pclDropped = 0;
     longTimeDiff = ros::Duration(0.0);
-  } else if (pclCount > 0) {
-    ROS_INFO("Processed %d clouds", pclCountProcessed);
+  }
+
+  if (pclCount > 0) {
+    double pcls = pclCountProcessed / (ros::Time::now() - event.last_real).toSec();
+    ROS_INFO("Processed %d clouds, %0.2f pcl/sec, %0.4f average", pclCountProcessed, pcls, pclTime / pclCountProcessed);
     pclCount = 0;
     pclCountProcessed = 0;
+    pclTime = 0;
   }
 }
 
@@ -1086,11 +1097,11 @@ void MarbleMapping::publishOptionalMaps(const ros::TimerEvent& event) {
 
             if (m_displayColor == 1) {
               RGBColor _color = it->getAgentColor(cubeCenter.z, minZ, maxZ, m_adjustAgent);
-              std_msgs::ColorRGBA _color_msg; _color_msg.r = _color.r; _color_msg.g = _color.g; _color_msg.b = _color.b; _color_msg.  a = 1.0f;
+              std_msgs::ColorRGBA _color_msg; _color_msg.r = _color.r; _color_msg.g = _color.g; _color_msg.b = _color.b; _color_msg.a = 1.0f;
               occupiedNodesVis.markers[idx].colors.push_back(_color_msg);
             } else if (m_displayColor == 2) {
               RGBColor _color = it->getRoughColor();
-              std_msgs::ColorRGBA _color_msg; _color_msg.r = _color.r; _color_msg.g = _color.g; _color_msg.b = _color.b; _color_msg.  a = 1.0f;
+              std_msgs::ColorRGBA _color_msg; _color_msg.r = _color.r; _color_msg.g = _color.g; _color_msg.b = _color.b; _color_msg.a = 1.0f;
               occupiedNodesVis.markers[idx].colors.push_back(_color_msg);
             } else {
               double h = (1.0 - std::min(std::max((cubeCenter.z-minZ)/ (maxZ - minZ), 0.0), 1.0)) *m_colorFactor;

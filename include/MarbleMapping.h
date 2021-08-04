@@ -235,7 +235,8 @@ protected:
 
   // Performance Tuning
   bool m_compressMaps;
-  bool m_enable_radius_outlier_removal;
+  bool m_passthroughFilter;
+  bool m_enableRadiusOutlierRemoval;
   double m_downsampleSize;
   double m_pclTimeLimit;
   int m_numThreads;
@@ -246,6 +247,7 @@ protected:
   unsigned int pclCount;
   unsigned int pclCountProcessed;
   unsigned int pclDropped;
+  double pclTime;
 
   bool m_filterSpeckles;
 

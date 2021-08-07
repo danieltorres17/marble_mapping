@@ -119,7 +119,7 @@ protected:
   * @param ground scan endpoints on the ground plane (only clear space)
   * @param nonground all other endpoints (clear up to occupied endpoint)
   */
-  virtual void insertScan(const tf::StampedTransform& sensorToWorldTf, const PCLPointCloud& ground, const PCLPointCloud& nonground);
+  virtual double insertScan(const tf::StampedTransform& sensorToWorldTf, const PCLPointCloud& ground, const PCLPointCloud& nonground);
 
   // Check the changes since last run to publish for sharing to other agents
   template <class OcTreeMT>
@@ -235,6 +235,7 @@ protected:
 
   // Performance Tuning
   bool m_compressMaps;
+  bool m_threadPublishing;
   bool m_passthroughFilter;
   bool m_enableRadiusOutlierRemoval;
   double m_downsampleSize;

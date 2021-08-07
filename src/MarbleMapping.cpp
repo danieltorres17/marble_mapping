@@ -82,6 +82,7 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_nh_private.param("occupancy_max_z", m_occupancyMaxZ,m_occupancyMaxZ);
 
   m_nh_private.param("compress_maps", m_compressMaps, true);
+  m_nh_private.param("thread_publishing", m_threadPublishing, true);
   m_nh_private.param("passthrough_filter", m_passthroughFilter, true);
   m_nh_private.param("enable_radius_outlier_removal", m_enableRadiusOutlierRemoval, false);
   m_nh_private.param("num_threads", m_numThreads, 1);
@@ -339,7 +340,7 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   ros::TimerOptions ops_pub;
   ops_pub.period = ros::Duration(pub_duration);
   ops_pub.callback = boost::bind(&MarbleMapping::publishOctoMaps, this, _1);
-  if (!octomapInput) ops_pub.callback_queue = &pub_queue;
+  if (m_threadPublishing && !octomapInput) ops_pub.callback_queue = &pub_queue;
   pub_timer = m_nh.createTimer(ops_pub);
 
   // Timer to publish the optional maps, on a separate thread
@@ -633,7 +634,7 @@ void MarbleMapping::insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr
   }
 
 
-  insertScan(sensorToWorldTf, pc_ground, pc_nonground);
+  double delayTime = insertScan(sensorToWorldTf, pc_ground, pc_nonground);
 
   if (m_compressMaps) {
     boost::mutex::scoped_lock lock(m_mtx);
@@ -645,13 +646,13 @@ void MarbleMapping::insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr
   ROS_DEBUG("Pointcloud insertion in MarbleMapping done (%zu+%zu pts (ground/nonground), %f sec)", pc_ground.size(), pc_nonground.size(), total_elapsed);
 
   pclCountProcessed++;
-  pclTime += total_elapsed;
+  pclTime += total_elapsed - delayTime;
   m_octree_updated = true;
   m_mtree_updated = true;
   m_mtree_markers_updated = true;
 }
 
-void MarbleMapping::insertScan(const tf::StampedTransform& sensorToWorldTf, const PCLPointCloud& ground, const PCLPointCloud& nonground){
+double MarbleMapping::insertScan(const tf::StampedTransform& sensorToWorldTf, const PCLPointCloud& ground, const PCLPointCloud& nonground){
   // Get the rotation matrix and the position, and build camera view if enabled
   tf::Matrix3x3 rotation = sensorToWorldTf.getBasis();
   point3d sensorOrigin = pointTfToOctomap(sensorToWorldTf.getOrigin());
@@ -663,6 +664,10 @@ void MarbleMapping::insertScan(const tf::StampedTransform& sensorToWorldTf, cons
 
   // Profile our processing time
   ros::WallTime startTime = ros::WallTime::now();
+  // Need to lock here due to rough integration during raycasting
+  boost::mutex::scoped_lock lock(m_mtx);
+  // Account for the delay in waiting for lock release in our overall PCL profiling
+  double delayTime = (ros::WallTime::now() - startTime).toSec();
 
   // insert ground points only as free:
   #pragma omp parallel for schedule(guided)
@@ -740,7 +745,6 @@ void MarbleMapping::insertScan(const tf::StampedTransform& sensorToWorldTf, cons
   double total_elapsed = (ros::WallTime::now() - startTime).toSec();
   ROS_DEBUG("The %zu points took %f seconds)", nonground.size(), total_elapsed);
 
-  boost::mutex::scoped_lock lock(m_mtx);
   // mark free cells only if not seen occupied in this cloud
   for(KeySet::iterator it = free_cells.begin(), end=free_cells.end(); it!= end; ++it){
     if (occupied_cells.find(*it) == occupied_cells.end()){
@@ -773,6 +777,8 @@ void MarbleMapping::insertScan(const tf::StampedTransform& sensorToWorldTf, cons
       m_camera_tree->updateNode(point, true);
     }
   }
+
+  return delayTime;
 }
 
 template <class OcTreeMT>
@@ -1550,6 +1556,7 @@ void MarbleMapping::reconfigureCallback(marble_mapping::MarbleMappingConfig& con
     m_occupancyMaxZ             = config.occupancy_max_z;
     m_filterSpeckles            = config.filter_speckles;
     m_filterGroundPlane         = config.filter_ground;
+    m_compressMaps              = config.compress_maps;
 
     // Parameters with a namespace require an special treatment at the beginning, as dynamic reconfigure
     // will overwrite them because the server is not able to match parameters' names.
@@ -1585,6 +1592,7 @@ void MarbleMapping::reconfigureCallback(marble_mapping::MarbleMappingConfig& con
       m_merged_tree->setClampingThresMin(config.sensor_model_min);
       m_merged_tree->setClampingThresMax(config.sensor_model_max);
       m_displayColor = config.display_color;
+      m_compressMaps = config.compress_maps;
 
       // Checking values that might create unexpected behaviors.
       if (is_equal(config.sensor_model_hit, 1.0))

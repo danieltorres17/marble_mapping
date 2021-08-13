@@ -42,8 +42,8 @@
        If already throttling the input, this should likely be left high. -->
   <arg name="pcl_time_limit" default="100.0" />
   <!-- How often to publish octomaps and optional maps (marker array, point cloud) -->
-  <arg name="publish_duration" default="0.1" />
-  <arg name="publish_optional_duration" default="0.2" />
+  <arg name="publish_duration" default="1" />
+  <arg name="publish_optional_duration" default="1" />
   <!-- Consider other options below such build_camera_map, remove_ceiling and other publishers -->
 
   <!-- Secondary camera settings for a restricted view map, such as for an artifact camera -->

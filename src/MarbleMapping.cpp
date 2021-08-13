@@ -928,11 +928,13 @@ void MarbleMapping::mergeNeighbors() {
       }
       // For each neighbor, clear the diffs
       seqs[nid.data()].clear();
-      neighbor_maps[nid.data()] = NULL;
+      if (m_publishNeighborMaps) neighbor_maps[nid.data()] = NULL;
     }
 
     // Initialize neighbor map data if enabled
-    if (m_publishNeighborMaps && !neighbor_maps[nid.data()]) {
+    if (m_publishNeighborMaps && !neighbor_maps.count(nid.data()) &&
+        neighbors.neighbors[i].num_octomaps > 0 &&
+        neighbors.neighbors[i].num_octomaps == neighbors.neighbors[i].octomaps.size()) {
       ROS_INFO("Adding neighbor map %s", nid.data());
       neighbor_maps[nid.data()] = new RoughOcTreeT(m_mres);
       neighbor_maps[nid.data()]->setRoughEnabled(m_enableTraversabilitySharing);
@@ -1047,6 +1049,10 @@ void MarbleMapping::publishOptionalMaps(const ros::TimerEvent& event) {
   bool publishFreeMarkerArray = m_publishFreeSpace && (m_fmarkerPub.getNumSubscribers() > 0);
   bool publishMarkerArray = m_publishMarkerArray && (m_markerPub.getNumSubscribers() > 0);
   bool publishPointCloud = m_publishPointCloud && (m_pointCloudPub.getNumSubscribers() > 0);
+
+  if (!publishMarkerArray && !publishFreeMarkerArray && !publishPointCloud) {
+    return;
+  }
 
   // init markers:
   visualization_msgs::MarkerArray freeNodesVis, occupiedNodesVis;
@@ -1402,7 +1408,7 @@ void MarbleMapping::publishNeighborMaps(const ros::Time& rostime) {
   boost::mutex::scoped_lock lock(m_mtx);
   for (auto& n : neighbor_maps) {
     // Find any maps that have been updated, and have subscribers
-    if (neighbor_updated.at(n.first) && (neighbor_pubs.at(n.first).getNumSubscribers() > 0)) {
+    if (n.second && neighbor_updated.at(n.first) && (neighbor_pubs.at(n.first).getNumSubscribers() > 0)) {
       neighbor_updated.at(n.first) = false;
       Octomap map;
       map.header.frame_id = m_worldFrameId;

@@ -38,8 +38,8 @@
   <arg name="publish_merged_binary" default="true" />
   <arg name="publish_merged_full" default="false" />
   <!-- How often to publish octomaps and optional maps (marker array, point cloud) -->
-  <arg name="publish_duration" default="0.1" />
-  <arg name="publish_optional_duration" default="0.2" />
+  <arg name="publish_duration" default="1" />
+  <arg name="publish_optional_duration" default="1" />
   <!-- Whether to publish the marker arrays and point cloud -->
   <arg name="publish_marker_array" default="true" />
   <arg name="publish_free_space" default="false" />

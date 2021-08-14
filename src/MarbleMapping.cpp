@@ -928,7 +928,7 @@ void MarbleMapping::mergeNeighbors() {
       }
       // For each neighbor, clear the diffs
       seqs[nid.data()].clear();
-      if (m_publishNeighborMaps) neighbor_maps[nid.data()] = NULL;
+      if (m_publishNeighborMaps) neighbor_maps[nid.data()]->clear();
     }
 
     // Initialize neighbor map data if enabled

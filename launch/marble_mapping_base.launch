@@ -68,6 +68,9 @@
   <arg name="sensor_model/min" default=".10" />
   <arg name="sensor_model/max" default=".97" />
 
+  <!-- Predefined colors for each agent -->
+  <arg name="color_pairs" default="2:H01,X1;3:H02,X2;4:H03,X3;5:D01,X4,A01;6:D02,X5,A02;7:A03;8:A04;9:A05" />
+
   <node pkg="marble_mapping" type="marble_mapping_node" name="marble_mapping" output="screen">
     <param name="resolution" value="$(arg resolution)" />
     <param name="merged_resolution" value="$(arg merged_resolution)" />
@@ -114,6 +117,8 @@
     <param name="sensor_model/miss" value="$(arg sensor_model/miss)" />
     <param name="sensor_model/min" value="$(arg sensor_model/min)" />
     <param name="sensor_model/max" value="$(arg sensor_model/max)" />
+
+    <param name="color_pairs" value="$(arg color_pairs)" />
 
     <remap from="cloud_in" to="$(arg cloud_in)" />
 

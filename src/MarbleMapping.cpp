@@ -43,8 +43,8 @@ namespace marble_mapping{
 MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeHandle &nh_)
 : m_nh(nh_),
   m_nh_private(private_nh_),
-  m_pointCloudSub(NULL),
-  m_tfPointCloudSub(NULL),
+  m_pointCloudSub(NULL), m_stairPointCloudSub(NULL),
+  m_tfPointCloudSub(NULL), m_stairTfPointCloudSub(NULL),
   m_reconfigureServer(m_config_mutex, private_nh_),
   m_maxRange(-1.0),
   m_worldFrameId("/map"), m_baseFrameId("base_footprint"),
@@ -63,9 +63,11 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_occupancyMaxZ(std::numeric_limits<double>::max()),
   m_filterSpeckles(false), m_filterGroundPlane(false),
   m_groundFilterDistance(0.04), m_groundFilterAngle(0.15), m_groundFilterPlaneDistance(0.07),
+  m_isNearStairs(false),
   m_initConfig(true)
 {
   double probHit, probMiss, thresMin, thresMax;
+  double stairsProbHit, stairsProbMiss, stairsThresMin, stairsThresMax, stairsProbThres;
 
   m_nh_private.param("input", m_input, 1);
   m_nh_private.param("frame_id", m_worldFrameId, m_worldFrameId);
@@ -121,8 +123,44 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_nh_private.param("diff_duration", diff_duration, 10.0);
   m_nh_private.param("diff_merged", m_diffMerged, false);
 
+  // traversability
   m_nh_private.param("enable_traversability", m_enableTraversability, false);
   m_nh_private.param("enable_traversability_sharing", m_enableTraversabilitySharing, false);
+  m_nh_private.param("trav_marker_density", m_travMarkerDensity, 0);
+
+  if (!m_enableTraversability && m_enableTraversabilitySharing) {
+    ROS_WARN("Traversability sharing enabled but traversability overall disabled. Disabling sharing.");
+    m_enableTraversabilitySharing = false;
+  }
+
+  m_publishTravMarkerArray = (m_travMarkerDensity>0 && m_enableTraversability);
+  if (m_publishTravMarkerArray)
+    m_travMarkerPub = m_nh.advertise<visualization_msgs::MarkerArray>("trav_text_markers", 1, m_latchedTopics);
+
+  // stairs
+  m_nh_private.param("enable_stairs", m_enableStairs, false);
+  m_nh_private.param("process_stairs_rate", m_stairProcessRate, 1.0f);
+  m_nh_private.param("stair_marker_density", m_stairMarkerDensity, 0);
+  m_nh_private.param("publish_stair_points_array", m_publishStairPointsArray, false);
+  m_nh_private.param("publish_stair_edge_array", m_publishStairEdgeArray, false);
+  m_nh_private.param("publish_near_stair_indicator", m_publishNearStairIndicator, false);
+  m_nh_private.param("is_near_stair_inner_rad", m_isNearStairInnerRad, 1.0f);
+  m_nh_private.param("is_near_stair_outer_rad", m_isNearStairOuterRad, 1.5f);
+  m_nh_private.param("stairs_prob_hit", stairsProbHit, 0.99);
+  m_nh_private.param("stairs_prob_miss", stairsProbMiss, 0.49);
+  m_nh_private.param("stairs_prob_thres", stairsProbThres, 0.5);
+  m_nh_private.param("stairs_thres_max", stairsThresMax, 0.97);
+  m_nh_private.param("stairs_thres_min", stairsThresMin, 0.12);
+
+  if (m_enableStairs) {
+    stairs_timer = m_nh.createTimer(ros::Duration(1.f/m_stairProcessRate), &MarbleMapping::processStairsLoop, this);
+    m_publishStairMarkerArray = m_stairMarkerDensity > 0;
+  } else {
+    m_publishStairMarkerArray = false;
+    m_publishStairPointsArray = false;
+    m_publishStairEdgeArray = false;
+    m_publishNearStairIndicator = false;
+  }
 
   if (m_filterGroundPlane && (m_pointcloudMinZ > 0.0 || m_pointcloudMaxZ < 0.0)){
     ROS_WARN_STREAM("You enabled ground filtering but incoming pointclouds will be pre-filtered in ["
@@ -137,6 +175,11 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_octree->setProbMiss(probMiss);
   m_octree->setClampingThresMin(thresMin);
   m_octree->setClampingThresMax(thresMax);
+  m_octree->setStairsEnabled(m_enableStairs);
+  m_octree->setStairsProbHit(stairsProbHit);
+  m_octree->setStairsProbMiss(stairsProbMiss);
+  m_octree->setStairsClampingThresMin(stairsThresMin);
+  m_octree->setStairsClampingThresMax(stairsThresMax);
 
   #pragma omp parallel
   #pragma omp master
@@ -156,6 +199,11 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_merged_tree->setProbMiss(probMiss);
   m_merged_tree->setClampingThresMin(thresMin);
   m_merged_tree->setClampingThresMax(thresMax);
+  m_merged_tree->setStairsEnabled(m_enableStairs);
+  m_merged_tree->setStairsProbHit(stairsProbHit);
+  m_merged_tree->setStairsProbMiss(stairsProbMiss);
+  m_merged_tree->setStairsClampingThresMin(stairsThresMin);
+  m_merged_tree->setStairsClampingThresMax(stairsThresMax);
   m_treeDepth = m_merged_tree->getTreeDepth();
   m_maxTreeDepth = m_treeDepth;
 
@@ -297,6 +345,15 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
     m_cameraView.action = visualization_msgs::Marker::ADD;
   }
 
+  if (m_publishStairMarkerArray)
+    m_stairMarkerPub = m_nh.advertise<visualization_msgs::MarkerArray>("stair_text_markers", 1, m_latchedTopics);
+  if (m_publishStairPointsArray)
+    m_stairPointsPub = m_nh.advertise<visualization_msgs::MarkerArray>("stair_points_array", 1, m_latchedTopics);
+  if (m_publishStairEdgeArray)
+    m_stairEdgePub = m_nh.advertise<visualization_msgs::MarkerArray>("stair_edge_array", 1, m_latchedTopics);
+  if (m_publishNearStairIndicator)
+    m_nearStairIndicatorPub = m_nh.advertise<std_msgs::Bool>("is_near_stair", 1, m_latchedTopics);
+
   // Subscribers
   if (pclInput) {
     // Suppress insane PCL warnings
@@ -304,6 +361,9 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
     m_pointCloudSub = new message_filters::Subscriber<sensor_msgs::PointCloud2> (m_nh, "cloud_in", 5);
     m_tfPointCloudSub = new tf::MessageFilter<sensor_msgs::PointCloud2> (*m_pointCloudSub, m_tfListener, m_worldFrameId, 5);
     m_tfPointCloudSub->registerCallback(boost::bind(&MarbleMapping::insertCloudCallback, this, _1));
+    m_stairPointCloudSub = new message_filters::Subscriber<sensor_msgs::PointCloud2> (m_nh, "stair_cloud_in", 5);
+    m_stairTfPointCloudSub = new tf::MessageFilter<sensor_msgs::PointCloud2> (*m_stairPointCloudSub, m_tfListener, m_worldFrameId, 5);
+    m_stairTfPointCloudSub->registerCallback(boost::bind(&MarbleMapping::insertStairCloudCallback, this, _1));
     // Services
     m_octomapBinaryService = m_nh.advertiseService("octomap_binary", &MarbleMapping::octomapBinarySrv, this);
     m_octomapFullService = m_nh.advertiseService("octomap_full", &MarbleMapping::octomapFullSrv, this);
@@ -344,7 +404,7 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   pub_timer = m_nh.createTimer(ops_pub);
 
   // Timer to publish the optional maps, on a separate thread
-  if (m_publishMarkerArray || m_publishFreeSpace || m_publishPointCloud) {
+  if (m_publishMarkerArray || m_publishFreeSpace || m_publishPointCloud || m_publishTravMarkerArray) {
     ros::TimerOptions ops;
     ops.period = ros::Duration(pub_opt_duration);
     ops.callback = boost::bind(&MarbleMapping::publishOptionalMaps, this, _1);
@@ -360,6 +420,10 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   pclCountProcessed = 0;
   pclDropped = 0;
   pclTime = 0;
+
+  std::string color_pairs_str;
+  m_nh_private.param("color_pairs", color_pairs_str, std::string(""));
+  parseColorPairs(color_pairs_str);
 
   dynamic_reconfigure::Server<MarbleMappingConfig>::CallbackType f;
   f = boost::bind(&MarbleMapping::reconfigureCallback, this, _1, _2);
@@ -580,7 +644,6 @@ void MarbleMapping::insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr
                         "You need to set the base_frame_id or disable filter_ground.");
     }
 
-
     Eigen::Matrix4f sensorToBase, baseToWorld;
     pcl_ros::transformAsMatrix(sensorToBaseTf, sensorToBase);
     pcl_ros::transformAsMatrix(baseToWorldTf, baseToWorld);
@@ -781,6 +844,354 @@ double MarbleMapping::insertScan(const tf::StampedTransform& sensorToWorldTf, co
   return delayTime;
 }
 
+void MarbleMapping::insertStairCloudCallback(const sensor_msgs::PointCloud2::ConstPtr& cloud){
+  PCLPointCloud pc; // input cloud for filtering and ground-detection
+  pcl::fromROSMsg(*cloud, pc);
+
+  if (m_downsampleSize > 0.0) {
+    pcl::VoxelGrid<PCLPoint> voxel_filter;
+    voxel_filter.setInputCloud (pc.makeShared());
+    voxel_filter.setFilterFieldName("x");
+    voxel_filter.setLeafSize (m_downsampleSize, m_downsampleSize, m_downsampleSize);
+    voxel_filter.filter (pc);
+  }
+
+  tf::StampedTransform sensorToWorldTf;
+  try {
+    m_tfListener.lookupTransform(m_worldFrameId, cloud->header.frame_id, cloud->header.stamp, sensorToWorldTf);
+  } catch(tf::TransformException& ex){
+    ROS_ERROR_STREAM( "Transform error of sensor data: " << ex.what() << ", quitting callback");
+    return;
+  }
+
+  Eigen::Matrix4f sensorToWorld;
+  pcl_ros::transformAsMatrix(sensorToWorldTf, sensorToWorld);
+
+  // directly transform to map frame:
+  pcl::transformPointCloud(pc, pc, sensorToWorld);
+
+  if (m_passthroughFilter) {
+    // set up filter for height range, also removes NANs:
+    pcl::PassThrough<PCLPoint> pass_x;
+    pass_x.setFilterFieldName("x");
+    pass_x.setFilterLimits(m_pointcloudMinX, m_pointcloudMaxX);
+    pcl::PassThrough<PCLPoint> pass_y;
+    pass_y.setFilterFieldName("y");
+    pass_y.setFilterLimits(m_pointcloudMinY, m_pointcloudMaxY);
+    pcl::PassThrough<PCLPoint> pass_z;
+    pass_z.setFilterFieldName("z");
+    pass_z.setFilterLimits(m_pointcloudMinZ, m_pointcloudMaxZ);
+
+    pass_x.setInputCloud(pc.makeShared());
+    pass_x.filter(pc);
+    pass_y.setInputCloud(pc.makeShared());
+    pass_y.filter(pc);
+    pass_z.setInputCloud(pc.makeShared());
+    pass_z.filter(pc);
+  }
+
+  insertStairScan(sensorToWorldTf, pc);
+}
+
+void MarbleMapping::insertStairScan(const tf::StampedTransform& sensorToWorldTf, const PCLPointCloud& pc){
+  point3d sensorOrigin = pointTfToOctomap(sensorToWorldTf.getOrigin());
+
+  // Profile our processing time
+  ros::WallTime startTime = ros::WallTime::now();
+
+  boost::mutex::scoped_lock lock(m_mtx);
+  for (PCLPointCloud::const_iterator it = pc.begin(); it < pc.end(); ++it) {
+    point3d point(it->x, it->y, it->z);
+
+    // minrange / maxrange check
+    if (((m_minRange <= 0.0) || ((point - sensorOrigin).norm() >= m_minRange)) &&
+        ((m_maxRange <= 0.0) || ((point - sensorOrigin).norm() <= m_maxRange))) {
+
+      // occupied endpoint
+      OcTreeKey key;
+      if (m_octree->coordToKeyChecked(point, key)) {
+        RoughOcTreeNode *oNode = m_octree->integrateNodeStairs(key, it->intensity > 0.5);
+        // The key might be different if the resolutions are different
+        key = m_merged_tree->coordToKey(point);
+        // Check if it was a stair node before the update
+        RoughOcTreeNode *newNode = m_merged_tree->search(key);
+        if (newNode != NULL) {
+          bool was_stairs = m_merged_tree->isNodeStairs(newNode);
+          // Set the new value
+          newNode->setStairLogOdds(oNode->getStairLogOdds());
+          // Convert the key back to the coordinate this is actually at
+          point3d mpoint = m_merged_tree->keyToCoord(key);
+          // If it's a stair point, add to the stair set
+          // If it was a stair point, but now isn't, remove it
+          if (m_merged_tree->isNodeStairs(newNode)) {
+            m_stairPoints.insert(mpoint);
+          } else if (was_stairs) {
+            m_stairPoints.erase(mpoint);
+          }
+        }
+      }
+    }
+  }
+  lock.unlock();
+
+  // Find the total time for stair processing
+  double total_elapsed = (ros::WallTime::now() - startTime).toSec();
+  ROS_DEBUG("The %zu stair points took %f seconds)", pc.size(), total_elapsed);
+}
+
+void MarbleMapping::processStairsLoop(const ros::TimerEvent& event) {
+
+  bool publishStairPointsArray = m_publishStairPointsArray && (m_stairPointsPub.getNumSubscribers() > 0);
+  bool publishStairEdgeArray = m_publishStairEdgeArray && (m_stairEdgePub.getNumSubscribers() > 0);
+  bool publishNearStairIndicator = m_publishNearStairIndicator && (m_nearStairIndicatorPub.getNumSubscribers() > 0);
+
+  pcl::PointCloud<pcl::PointXYZ> stairCloud;
+  // Convert the point3d set into a point cloud
+  for (auto& point : m_stairPoints) {
+    pcl::PointXYZ spoint;
+    spoint.x = point.x(); spoint.y = point.y(); spoint.z = point.z();
+    stairCloud.push_back(spoint);
+  }
+
+  // abort if no stair points
+  if (stairCloud.height * stairCloud.width == 0) {
+    ROS_DEBUG("No stairs mapped. Skipping stair processing...");
+    return;
+  }
+
+  ROS_DEBUG("Extracting stair clusters.");
+  // extract clusters
+  std::vector<pcl::PointIndices> cluster_indices;
+  std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> pointsVec;
+  pcl::search::KdTree<pcl::PointXYZ>::Ptr kdtree(new pcl::search::KdTree<pcl::PointXYZ>);
+  pcl::PointCloud<pcl::PointXYZ>::Ptr stairCloudPtr(new pcl::PointCloud<pcl::PointXYZ>(stairCloud));
+  kdtree->setInputCloud(stairCloudPtr);
+  pcl::EuclideanClusterExtraction<pcl::PointXYZ> euclidean_cluster_extractor;
+  euclidean_cluster_extractor.setClusterTolerance(1.8*m_res);
+  euclidean_cluster_extractor.setMinClusterSize(15); // Cluster must be at least 15 voxels in size
+  euclidean_cluster_extractor.setSearchMethod(kdtree);
+  euclidean_cluster_extractor.setInputCloud(stairCloudPtr);
+  euclidean_cluster_extractor.extract(cluster_indices);
+
+  for (uint i=0; i < cluster_indices.size(); i++) {
+    pcl::PointIndices::Ptr indices (new pcl::PointIndices(cluster_indices[i]));
+    pcl::ExtractIndices<pcl::PointXYZ> extract;
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud (new pcl::PointCloud<pcl::PointXYZ>);
+    extract.setInputCloud(stairCloudPtr);
+    extract.setIndices(indices);
+    extract.setNegative(false);
+    extract.filter(*cloud);
+    pointsVec.push_back(cloud);
+  }
+
+  // pub stair points marker array
+  if (publishStairPointsArray) {
+    ROS_DEBUG("Publishing stair voxels.");
+    visualization_msgs::MarkerArray stairPointsArray;
+    visualization_msgs::Marker stairPointsMarker;
+    stairPointsMarker.action = visualization_msgs::Marker::DELETEALL;
+    stairPointsArray.markers.push_back(stairPointsMarker);
+    m_stairPointsPub.publish(stairPointsArray);
+
+    float size = m_res;
+    for (uint i=0; i < pointsVec.size(); i++) {
+      visualization_msgs::Marker stairPointsMarker;
+      stairPointsMarker.header.frame_id = m_worldFrameId;
+      stairPointsMarker.header.stamp = ros::Time::now();
+      stairPointsMarker.ns = "map";
+      stairPointsMarker.id = i;
+      stairPointsMarker.type = visualization_msgs::Marker::CUBE_LIST;
+      stairPointsMarker.scale.x = size;
+      stairPointsMarker.scale.y = size;
+      stairPointsMarker.scale.z = size;
+      RGBColor color = ratioToRGB((float)(i+1) / (float)pointsVec.size());
+      stairPointsMarker.color.r = color.r;
+      stairPointsMarker.color.g = color.g;
+      stairPointsMarker.color.b = color.b;
+      stairPointsMarker.color.a = 1.0;
+
+      for (pcl::PointCloud<pcl::PointXYZ>::const_iterator it = pointsVec[i]->begin(); it < pointsVec[i]->end(); ++it) {
+        geometry_msgs::Point pt;
+        pt.x = it->x;
+        pt.y = it->y;
+        pt.z = it->z;
+        stairPointsMarker.points.push_back(pt);
+      }
+
+      stairPointsArray.markers.push_back(stairPointsMarker);
+    }
+    m_stairPointsPub.publish(stairPointsArray);
+  }
+
+  ROS_DEBUG("Extracting stair edges.");
+  // extract stair edges
+  std::vector<std::pair<pcl::PointXYZ,pcl::PointXYZ>> stair_edges;
+  stair_edges.resize(pointsVec.size());
+  {
+    for (uint i=0; i < pointsVec.size(); i++) {
+      Eigen::Vector3f upVec; upVec << 0, 0, 1;
+
+      pcl::PCA<pcl::PointXYZ> pca;
+      pca.setInputCloud (pointsVec[i]);
+      Eigen::Vector3f eigenVals = pca.getEigenValues();
+      Eigen::Matrix3f eigenVecs = pca.getEigenVectors();
+
+      // always point up
+      Eigen::Vector3f eigenDotProds;
+      for (uint j=0; j < 3; j++) {
+        eigenDotProds(j) = upVec.dot(eigenVecs.col(j));
+        if (eigenDotProds(j) < 0.f) {
+          eigenVecs.col(j) *= -1.f;
+          eigenDotProds(j) *= -1.f;
+        }
+      }
+
+      float optPitchDeg = 90.f-35.f;
+      float optPitchDot = cos(DEG2RAD(optPitchDeg));
+      float pitchTolDeg = 5.f;
+      float minPitchDot = cos(DEG2RAD(optPitchDeg+pitchTolDeg));
+      float maxPitchDot = cos(DEG2RAD(optPitchDeg-pitchTolDeg));
+      int optPitchEigIdx = -1;
+      float minPitchErr = 1.f;
+      for (uint j=0; j < 2; j++) {
+        float thisMinPitchErr = abs(optPitchDot-eigenDotProds(j));
+        if (thisMinPitchErr < minPitchErr) {
+          minPitchErr = thisMinPitchErr;
+          optPitchEigIdx = j;
+        }
+      }
+      if (optPitchEigIdx==-1)
+        continue;
+
+      pcl::PointCloud<pcl::PointXYZ>::Ptr cloudProjected (new pcl::PointCloud<pcl::PointXYZ>);
+      pca.project(*pointsVec[i], *cloudProjected);
+      pcl::PointXYZ minPointProjected, maxPointProjected, minPoint, maxPoint;
+      pcl::getMinMax3D(*cloudProjected, minPointProjected, maxPointProjected);
+      switch (optPitchEigIdx) {
+        case 0:
+          minPointProjected.y = 0;
+          minPointProjected.z = 0;
+          maxPointProjected.y = 0;
+          maxPointProjected.z = 0;
+          break;
+        case 1:
+          minPointProjected.x = 0;
+          minPointProjected.z = 0;
+          maxPointProjected.x = 0;
+          maxPointProjected.z = 0;
+          break;
+        case 2:
+          minPointProjected.y = 0;
+          minPointProjected.x = 0;
+          maxPointProjected.y = 0;
+          maxPointProjected.x = 0;
+          break;
+        default:
+          break;
+      }
+      pca.reconstruct(minPointProjected, minPoint);
+      pca.reconstruct(maxPointProjected, maxPoint);
+
+      stair_edges[i].first = minPoint;
+      stair_edges[i].second = maxPoint;
+    }
+  }
+
+  // pub stair edge array
+  if (publishStairEdgeArray) {
+    ROS_DEBUG("Publishing stair edges.");
+    visualization_msgs::MarkerArray stairEdgeArray;
+    visualization_msgs::Marker stairEdgeMarker;
+    stairEdgeMarker.action = visualization_msgs::Marker::DELETEALL;
+    stairEdgeArray.markers.push_back(stairEdgeMarker);
+    m_stairEdgePub.publish(stairEdgeArray);
+
+    for (uint i=0; i < pointsVec.size(); i++) {
+      if (stair_edges[i].first.x==0.f &&
+          stair_edges[i].first.y==0.f &&
+          stair_edges[i].first.z==0.f &&
+          stair_edges[i].second.x==0.f &&
+          stair_edges[i].second.y==0.f &&
+          stair_edges[i].second.z==0.f) {
+        continue;
+      }
+
+      visualization_msgs::Marker stairEdgeMarker;
+      stairEdgeMarker.header.frame_id = m_worldFrameId;
+      stairEdgeMarker.header.stamp = ros::Time::now();
+      stairEdgeMarker.ns = "map";
+      stairEdgeMarker.id = i;
+      stairEdgeMarker.type = visualization_msgs::Marker::LINE_LIST;
+      stairEdgeMarker.action = visualization_msgs::Marker::ADD;
+      stairEdgeMarker.scale.x = 0.1;
+      stairEdgeMarker.scale.y = 0.1;
+      stairEdgeMarker.scale.z = 0.1;
+      RGBColor color = ratioToRGB((float)(i+1) / (float)pointsVec.size());
+      stairEdgeMarker.color.r = color.r;
+      stairEdgeMarker.color.g = color.g;
+      stairEdgeMarker.color.b = color.b;
+      stairEdgeMarker.color.a = 1.0;
+
+      geometry_msgs::Point minPointMsg, maxPointMsg;
+      minPointMsg.x = stair_edges[i].first.x;
+      minPointMsg.y = stair_edges[i].first.y;
+      minPointMsg.z = stair_edges[i].first.z;
+      stairEdgeMarker.points.push_back(minPointMsg);
+      maxPointMsg.x = stair_edges[i].second.x;
+      maxPointMsg.y = stair_edges[i].second.y;
+      maxPointMsg.z = stair_edges[i].second.z;
+      stairEdgeMarker.points.push_back(maxPointMsg);
+
+      stairEdgeArray.markers.push_back(stairEdgeMarker);
+    }
+    m_stairEdgePub.publish(stairEdgeArray);
+  }
+
+  // publish near stair indicator
+  if (publishNearStairIndicator) {
+    ROS_DEBUG("Publishing near stair indicator.");
+    // get current position
+    tf::StampedTransform baseToWorldTf;
+    try {
+      m_tfListener.waitForTransform(m_worldFrameId, m_baseFrameId, ros::Time::now(), ros::Duration(0.2));
+      m_tfListener.lookupTransform(m_worldFrameId, m_baseFrameId, ros::Time(0), baseToWorldTf);
+    } catch (tf::TransformException& ex) {
+      ROS_ERROR("near stair transform error %s", ex.what());
+      return;
+    }
+    pcl::PointXYZ pos(baseToWorldTf.getOrigin().getX(), baseToWorldTf.getOrigin().getY(), baseToWorldTf.getOrigin().getZ());
+
+    // get nearest stair position
+    pcl::PointXYZ nearest_stair_pos;
+    float nearest_stair_dist = INFINITY;
+    for (pcl::PointCloud<pcl::PointXYZ>::const_iterator it = stairCloud.begin(); it < stairCloud.end(); ++it) {
+      float stair_dist = sqrt(pow(it->x-pos.x,2)+pow(it->y-pos.y,2));
+      if (stair_dist < nearest_stair_dist) {
+        nearest_stair_pos = *it;
+        nearest_stair_dist = stair_dist;
+      }
+    }
+
+    // abort if no nearby stair points (shouldn't be necessary bc stairCloud should not be empty but just in case)
+    if (nearest_stair_pos.x == 0.f && nearest_stair_pos.y == 0.f && nearest_stair_pos.z == 0.f)
+      return;
+
+    // use nearest stair position to determine if near stairs (ie should trigger stair mode)
+    if (!m_isNearStairs && (pcl::euclideanDistance(nearest_stair_pos,pos) < m_isNearStairInnerRad)) {
+      // was not prev near stairs but am now
+      m_isNearStairs = true;
+    } else if (m_isNearStairs && (pcl::euclideanDistance(nearest_stair_pos,pos) > m_isNearStairOuterRad)) {
+      // was prev near stairs but no longer am
+      m_isNearStairs = false;
+    }
+
+    // publish near stair indicator
+    std_msgs::Bool isNearStairMsg;
+    isNearStairMsg.data = m_isNearStairs;
+    m_nearStairIndicatorPub.publish(isNearStairMsg);
+  }
+}
+
 template <class OcTreeMT>
 int MarbleMapping::updateDiffTree(OcTreeMT* tree, PCLPointCloudRGB& pclDiffCloud) {
   // Find all changed nodes since last update and create a new octomap
@@ -895,6 +1306,59 @@ void MarbleMapping::updateDiff(const ros::TimerEvent& event) {
   }
 }
 
+void MarbleMapping::parseIDXandAgent(std::string& cidx_str) {
+  std::string agent;
+
+  // Get the idx (number before colon) and adjust the next_idx if bigger
+  auto cidx_end = cidx_str.find(":");
+  int cidx = std::stoi(cidx_str.substr(0, cidx_end));
+  if (cidx > next_idx) next_idx = cidx + 1;
+
+  // Parse the rest of the string into each agent and store
+  auto start = cidx_end + 1;
+  auto end = 0;
+  while ((end = cidx_str.find(",", start)) != std::string::npos) {
+    agent = cidx_str.substr(start, end-start);
+    // Store in our map for later use
+    color_pairs[agent.data()] = cidx;
+    start = end + 1;
+  }
+  // Store the last agent as well
+  agent = cidx_str.substr(start, end);
+  color_pairs[agent.data()] = cidx;
+}
+
+void MarbleMapping::parseColorPairs(std::string& color_pairs_str) {
+  auto start = 0;
+  auto end = 0;
+  std::string cidx_str;
+  // Get each idx/agent group
+  while ((end = color_pairs_str.find(";", start)) != std::string::npos) {
+    cidx_str = color_pairs_str.substr(start, end-start);
+    // Find the idx and agents and store
+    parseIDXandAgent(cidx_str);
+    start = end + 1;
+  }
+  // Get the last set
+  cidx_str = color_pairs_str.substr(start, end);
+  parseIDXandAgent(cidx_str);
+}
+
+char MarbleMapping::nidToIDX(std::string& nid) {
+  char nidx = 127;
+  // See if there's already an idx configured for this nid
+  if (color_pairs.count(nid.data()))
+    nidx = color_pairs[nid.data()];
+
+  // If not, use the next available
+  if (nidx == 127) {
+    nidx = next_idx;
+    next_idx++;
+  }
+
+  return nidx;
+}
+
 void MarbleMapping::mergeNeighbors() {
   // Merge neighbor maps with local map
   std::shared_ptr<RoughOcTreeT> ntree(nullptr);
@@ -928,7 +1392,8 @@ void MarbleMapping::mergeNeighbors() {
       }
       // For each neighbor, clear the diffs
       seqs[nid.data()].clear();
-      if (m_publishNeighborMaps) neighbor_maps[nid.data()]->clear();
+      if (m_publishNeighborMaps && neighbor_maps.count(nid.data()))
+          neighbor_maps[nid.data()]->clear();
     }
 
     // Initialize neighbor map data if enabled
@@ -958,9 +1423,8 @@ void MarbleMapping::mergeNeighbors() {
         if (idx[nid.data()])
           agent = idx[nid.data()];
         else {
-          idx[nid.data()] = next_idx;
-          agent = next_idx;
-          next_idx++;
+          agent = nidToIDX(nid);
+          idx[nid.data()] = agent;
         }
 
         // Check if this is an out-of-sequence diff, and force remerge of later sequences we have
@@ -1049,20 +1513,22 @@ void MarbleMapping::publishOptionalMaps(const ros::TimerEvent& event) {
   bool publishFreeMarkerArray = m_publishFreeSpace && (m_fmarkerPub.getNumSubscribers() > 0);
   bool publishMarkerArray = m_publishMarkerArray && (m_markerPub.getNumSubscribers() > 0);
   bool publishPointCloud = m_publishPointCloud && (m_pointCloudPub.getNumSubscribers() > 0);
+  bool publishTravMarkerArray = m_publishTravMarkerArray && (m_travMarkerPub.getNumSubscribers() > 0);
+  bool publishStairMarkerArray = m_publishStairMarkerArray && (m_stairMarkerPub.getNumSubscribers() > 0);
 
   if (!publishMarkerArray && !publishFreeMarkerArray && !publishPointCloud) {
     return;
   }
 
   // init markers:
-  visualization_msgs::MarkerArray freeNodesVis, occupiedNodesVis;
+  visualization_msgs::MarkerArray freeNodesVis, occupiedNodesVis, travMarkers, stairMarkers;
 
   // init pointcloud:
   pcl::PointCloud<PCLPoint> pclCloud;
 
   boost::mutex::scoped_lock lock(m_mtx);
   // Only traverse the tree if we're publishing a marker array or point cloud
-  if (publishMarkerArray || publishFreeMarkerArray || publishPointCloud) {
+  if (publishMarkerArray || publishFreeMarkerArray || publishPointCloud || publishTravMarkerArray || publishStairMarkerArray) {
     // each array stores all cubes of a different size, one for each depth level:
     freeNodesVis.markers.resize(m_treeDepth+1);
     occupiedNodesVis.markers.resize(m_treeDepth+1);
@@ -1111,7 +1577,7 @@ void MarbleMapping::publishOptionalMaps(const ros::TimerEvent& event) {
               RGBColor _color = it->getAgentColor(cubeCenter.z, minZ, maxZ, m_adjustAgent);
               std_msgs::ColorRGBA _color_msg; _color_msg.r = _color.r; _color_msg.g = _color.g; _color_msg.b = _color.b; _color_msg.a = 1.0f;
               occupiedNodesVis.markers[idx].colors.push_back(_color_msg);
-            } else if (m_displayColor == 2) {
+            } else if (m_displayColor == 2 && m_merged_tree->getRoughEnabled()) {
               RGBColor _color = it->getRoughColor();
               std_msgs::ColorRGBA _color_msg; _color_msg.r = _color.r; _color_msg.g = _color.g; _color_msg.b = _color.b; _color_msg.a = 1.0f;
               occupiedNodesVis.markers[idx].colors.push_back(_color_msg);
@@ -1123,14 +1589,49 @@ void MarbleMapping::publishOptionalMaps(const ros::TimerEvent& event) {
 
           // insert into pointcloud:
           if (publishPointCloud) {
-            PCLPoint pcpoint;
-            pcpoint.x = x;
-            pcpoint.y = y;
-            pcpoint.z = z;
-            pcpoint.intensity = it->getRough();
-            pclCloud.push_back(pcpoint);
+            PCLPoint _point = PCLPoint();
+            _point.x = x; _point.y = y; _point.z = z;
+            if (m_merged_tree->getRoughEnabled()) {
+              _point.intensity = it->getRough();
+            }
+            pclCloud.push_back(_point);
           }
 
+          if (publishTravMarkerArray &&
+              ((int)round(x / size) % m_travMarkerDensity == 0 &&
+               (int)round(y / size) % m_travMarkerDensity == 0)) {
+            char text_buf[50];
+            sprintf(text_buf, "%0.2f", it->getRough());
+            std::string text_str = text_buf;
+            visualization_msgs::Marker marker;
+            marker.pose.position.x = x;
+            marker.pose.position.y = y;
+            marker.pose.position.z = z + size;
+            marker.pose.orientation.x = 0.0;
+            marker.pose.orientation.y = 0.0;
+            marker.pose.orientation.z = 0.0;
+            marker.pose.orientation.w = 1.0;
+            marker.text = text_buf;
+            travMarkers.markers.push_back(marker);
+          }
+
+          if (publishStairMarkerArray &&
+              ((int)round(x / size) % m_stairMarkerDensity == 0 &&
+               (int)round(y / size) % m_stairMarkerDensity == 0)) {
+            char text_buf[50];
+            sprintf(text_buf, "%0.2f", it->getStairProbability());
+            std::string text_str = text_buf;
+            visualization_msgs::Marker marker;
+            marker.pose.position.x = x;
+            marker.pose.position.y = y;
+            marker.pose.position.z = z+size;
+            marker.pose.orientation.x = 0.0;
+            marker.pose.orientation.y = 0.0;
+            marker.pose.orientation.z = 0.0;
+            marker.pose.orientation.w = 1.0;
+            marker.text = text_buf;
+            stairMarkers.markers.push_back(marker);
+          }
         }
       } else { // node not occupied => mark as free in 2D map if unknown so far
         if (publishFreeMarkerArray) {
@@ -1213,6 +1714,54 @@ void MarbleMapping::publishOptionalMaps(const ros::TimerEvent& event) {
     cloud.header.frame_id = m_worldFrameId;
     cloud.header.stamp = rostime;
     m_pointCloudPub.publish(cloud);
+  }
+
+  if (publishTravMarkerArray){
+    for (unsigned i= 0; i < travMarkers.markers.size(); ++i){
+      double size = m_res;
+
+      travMarkers.markers[i].header.frame_id = m_worldFrameId;
+      travMarkers.markers[i].header.stamp = rostime;
+      travMarkers.markers[i].ns = "map";
+      travMarkers.markers[i].id = i;
+      travMarkers.markers[i].type = visualization_msgs::Marker::TEXT_VIEW_FACING;
+      travMarkers.markers[i].scale.z = 0.1;
+      travMarkers.markers[i].color.r = 1.0;
+      travMarkers.markers[i].color.g = 1.0;
+      travMarkers.markers[i].color.b = 1.0;
+      travMarkers.markers[i].color.a = 1.0;
+
+      if (travMarkers.markers[i].text != "")
+        travMarkers.markers[i].action = visualization_msgs::Marker::ADD;
+      else
+        travMarkers.markers[i].action = visualization_msgs::Marker::DELETE;
+    }
+
+    m_travMarkerPub.publish(travMarkers);
+  }
+
+  if (publishStairMarkerArray){
+    for (unsigned i= 0; i < stairMarkers.markers.size(); ++i){
+      double size = m_res;
+
+      stairMarkers.markers[i].header.frame_id = m_worldFrameId;
+      stairMarkers.markers[i].header.stamp = rostime;
+      stairMarkers.markers[i].ns = "map";
+      stairMarkers.markers[i].id = i;
+      stairMarkers.markers[i].type = visualization_msgs::Marker::TEXT_VIEW_FACING;
+      stairMarkers.markers[i].scale.z = 0.1;
+      stairMarkers.markers[i].color.r = 1.0;
+      stairMarkers.markers[i].color.g = 1.0;
+      stairMarkers.markers[i].color.b = 1.0;
+      stairMarkers.markers[i].color.a = 1.0;
+
+      if (stairMarkers.markers[i].text != "")
+        stairMarkers.markers[i].action = visualization_msgs::Marker::ADD;
+      else
+        stairMarkers.markers[i].action = visualization_msgs::Marker::DELETE;
+    }
+
+    m_stairMarkerPub.publish(stairMarkers);
   }
 
   double total_elapsed = (ros::WallTime::now() - startTime).toSec();
@@ -1305,7 +1854,7 @@ bool MarbleMapping::resetSrv(std_srvs::Empty::Request& req, std_srvs::Empty::Res
   ros::Time rostime = ros::Time::now();
   m_octree->clear();
   m_merged_tree->clear();
-  ROS_INFO("Cleared octomap");
+  ROS_INFO("Cleared maps");
 
   publishBinaryOctoMap(rostime);
   publishMergedBinaryOctoMap(rostime);

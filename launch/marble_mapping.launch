@@ -6,19 +6,37 @@
   <arg name="merged_resolution" default="0.2" />
   <!-- Fixed map frame (set to 'map' if SLAM or localization running!) -->
   <arg name="frame_id" default="world" />
+  <arg name="base_frame_id" default="base_footprint" />
   <!-- Enable merging neighbor maps into our map -->
   <arg name="merge_maps" default="true" />
   <!-- Input type: 0=none, 1=pointcloud, 2=octomap -->
   <arg name="input" default="1" />
   <!-- Data source to integrate (PointCloud2) -->
   <arg name="cloud_in" default="points" />
+  <arg name="stair_cloud_in" default="stair_points"/>
   <!-- Minimum / Maximum range to integrate (speedup!) -->
   <arg name="min_range" default="0.0" />
   <arg name="max_range" default="7.0" />
+
   <!-- Enable traversability info to be integrated into occupied cells from intensity channel of input pointcloud -->
   <arg name="enable_traversability" default="false" />
   <!-- Enable sharing of traversability info between agents for global terrain-aware planning  -->
   <arg name="enable_traversability_sharing" default="false" />
+  <arg name="trav_marker_density"             default="1"/>
+
+  <arg name="enable_stairs" default="false"/>
+  <arg name="process_stairs_rate" default="1.0"/>
+  <arg name="stair_marker_density" default="1"/>
+  <arg name="publish_stair_points_array" default="true"/>
+  <arg name="publish_stair_edge_array" default="true"/>
+  <arg name="publish_near_stair_indicator" default="true"/>
+  <arg name="is_near_stair_inner_rad" default="1.0"/>
+  <arg name="is_near_stair_outer_rad" default="1.5"/>
+  <arg name="stairs_prob_hit" default="0.99"/>
+  <arg name="stairs_prob_miss" default="0.49"/>
+  <arg name="stairs_prob_thres" default="0.5"/>
+  <arg name="stairs_thres_max" default="0.97"/>
+  <arg name="stairs_thres_min" default="0.12"/>
 
   <!-- Performance Tuning Options-->
   <!-- Whether to prune maps as they're created.  Expensive on big maps! -->
@@ -42,8 +60,8 @@
        If already throttling the input, this should likely be left high. -->
   <arg name="pcl_time_limit" default="100.0" />
   <!-- How often to publish octomaps and optional maps (marker array, point cloud) -->
-  <arg name="publish_duration" default="1" />
-  <arg name="publish_optional_duration" default="1" />
+  <arg name="publish_duration" default="1.0" />
+  <arg name="publish_optional_duration" default="1.0" />
   <!-- Consider other options below such build_camera_map, remove_ceiling and other publishers -->
 
   <!-- Secondary camera settings for a restricted view map, such as for an artifact camera -->
@@ -60,12 +78,12 @@
   <!-- Whether to publish the marker arrays and point cloud -->
   <arg name="publish_marker_array" default="true" />
   <arg name="publish_free_space" default="false" />
-  <arg name="publish_point_cloud" default="true" />
+  <arg name="publish_point_cloud" default="false" />
   <arg name="publish_point_cloud_diff" default="false" />
   <!-- Whether to publish neighbor maps to neighbors/VEHICLE/map -->
   <arg name="publish_neighbor_maps" default="false" />
   <!-- Which color mode to use for map publishing.  Options are 1 (agent), 2 (rough), 3 (z-axis) -->
-  <arg name="display_color" default="1" />
+  <arg name="display_color" default="2" />
   <!-- Whether to remove ceiling from marker arrays and point clouds, and how deep to check -->
   <arg name="remove_ceiling" default="true" />
   <arg name="remove_ceiling_depth" default="4" />
@@ -80,21 +98,28 @@
   <!-- Remove ground plane occupancy from occupancy grid (boolean)-->
   <arg name="filter_ground" default="false" />
 
+  <!-- Sensor model parameters -->
   <arg name="sensor_model/hit" default=".95" />
   <arg name="sensor_model/miss" default=".48" />
   <arg name="sensor_model/min" default=".12" />
   <arg name="sensor_model/max" default=".97" />
 
-  <node pkg="marble_mapping" type="marble_mapping_node" name="marble_mapping" respawn="true" output="screen">
+  <!-- Predefined colors for each agent -->
+  <arg name="color_pairs" default="2:H01,X1;3:H02,X2;4:H03,X3;5:D01,X4,A01;6:D02,X5,A02;7:A03;8:A04;9:A05" />
+
+  <arg name="enable_debug" default="false"/>
+  <arg name="launch_prefix" default="" unless="$(arg enable_debug)"/>
+  <arg name="launch_prefix" default="gdb -ex run --args" if="$(arg enable_debug)"/>
+
+  <node pkg="marble_mapping" type="marble_mapping_node" name="marble_mapping" respawn="true" output="screen" launch-prefix="$(arg launch_prefix)">
     <param name="resolution" value="$(arg resolution)" />
     <param name="merged_resolution" value="$(arg merged_resolution)" />
     <param name="frame_id" type="string" value="$(arg frame_id)" />
+    <param name="base_frame_id" type="string" value="$(arg base_frame_id)" />
     <param name="merge_maps" value="$(arg merge_maps)" />
     <param name="input" value="$(arg input)" />
     <param name="sensor_model/max_range" value="$(arg max_range)" />
     <param name="sensor_model/min_range" value="$(arg min_range)" />
-    <param name="enable_traversability" value="$(arg enable_traversability)" />
-    <param name="enable_traversability_sharing" value="$(arg enable_traversability_sharing)" />
     <param name="compress_maps" value="$(arg compress_maps)" />
     <param name="thread_publishing" value="$(arg thread_publishing)" />
     <param name="passthrough_filter" value="$(arg passthrough_filter)" />
@@ -130,6 +155,24 @@
     <param name="diff_duration" value="$(arg diff_duration)" />
     <param name="diff_merged" value="$(arg diff_merged)" />
 
+    <param name="enable_traversability"           value="$(arg enable_traversability)" />
+    <param name="enable_traversability_sharing"   value="$(arg enable_traversability_sharing)" />
+    <param name="trav_marker_density"             value="$(arg trav_marker_density)" />
+
+    <param name="enable_stairs"                 value="$(arg enable_stairs)" />
+    <param name="process_stairs_rate"           value="$(arg process_stairs_rate)" />
+    <param name="stair_marker_density"          value="$(arg stair_marker_density)" />
+    <param name="publish_stair_points_array"    value="$(arg publish_stair_points_array)" />
+    <param name="publish_stair_edge_array"      value="$(arg publish_stair_edge_array)" />
+    <param name="publish_near_stair_indicator"  value="$(arg publish_near_stair_indicator)" />
+    <param name="is_near_stair_inner_rad"       value="$(arg is_near_stair_inner_rad)" />
+    <param name="is_near_stair_outer_rad"       value="$(arg is_near_stair_outer_rad)" />
+    <param name="stairs_prob_hit"               value="$(arg stairs_prob_hit)" />
+    <param name="stairs_prob_miss"              value="$(arg stairs_prob_miss)" />
+    <param name="stairs_prob_thres"             value="$(arg stairs_prob_thres)" />
+    <param name="stairs_thres_max"              value="$(arg stairs_thres_max)" />
+    <param name="stairs_thres_min"              value="$(arg stairs_thres_min)" />
+
     <param name="filter_ground" value="$(arg filter_ground)" />
 
     <param name="sensor_model/hit" value="$(arg sensor_model/hit)" />
@@ -137,10 +180,14 @@
     <param name="sensor_model/min" value="$(arg sensor_model/min)" />
     <param name="sensor_model/max" value="$(arg sensor_model/max)" />
 
+    <param name="color_pairs" value="$(arg color_pairs)" />
+
     <remap from="cloud_in" to="$(arg cloud_in)" />
+    <remap from="stair_cloud_in" to="$(arg stair_cloud_in)" />
 
     <!-- The robot's base frame in which the ground plane detection is performed -->
     <!-- <remap from="base_frame_id" to="/X1/base_link" /> -->
 
   </node>
+
 </launch>

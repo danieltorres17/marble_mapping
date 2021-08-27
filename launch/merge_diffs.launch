@@ -13,6 +13,7 @@
   <arg name="agents" default="X1,X2,X3,X4" />
   <arg name="diff_pre" default="/robot_data/" />
   <arg name="diff_post" default="/map_diff" />
+
   <!-- Topic prefix to output to, ie merged_map outputs to merged_map_markers, etc -->
   <arg name="prefix" default="merged_map" />
   <arg name="publish_merged_binary" default="true" />
@@ -26,6 +27,11 @@
   <!-- Whether to remove ceiling from marker arrays and point clouds, and how deep to check -->
   <arg name="remove_ceiling" default="true" />
   <arg name="remove_ceiling_depth" default="4" />
+
+  <arg name="enable_traversability"           default="false" />
+  <arg name="enable_traversability_sharing"   default="false" />
+
+  <arg name="color_pairs" default="2:H01,X1;3:H02,X2;4:H03,X3;5:D01,X4,A01;6:D02,X5,A02;7:A03;8:A04;9:A05" />
 
   <node pkg="marble_mapping" type="marble_mapping_node" name="merge_diffs" output="screen">
     <param name="merged_resolution" value="$(arg merged_resolution)" />
@@ -48,5 +54,10 @@
     <remap from="merged_map_markers" to="$(arg prefix)_markers" />
     <remap from="merged_map_free" to="$(arg prefix)_free" />
     <remap from="merged_map_pc" to="$(arg prefix)_pc" />
+
+    <param name="enable_traversability"           value="$(arg enable_traversability)" />
+    <param name="enable_traversability_sharing"   value="$(arg enable_traversability_sharing)" />
+
+    <param name="color_pairs" value="$(arg color_pairs)" />
   </node>
 </launch>

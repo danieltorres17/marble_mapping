@@ -34,6 +34,7 @@
 #include <ros/ros.h>
 #include <visualization_msgs/MarkerArray.h>
 #include <std_msgs/ColorRGBA.h>
+#include <std_msgs/Bool.h>
 
 #include <sensor_msgs/PointCloud2.h>
 #include <std_srvs/Empty.h>
@@ -44,6 +45,10 @@
 #include <pcl/conversions.h>
 #include <pcl_ros/transforms.h>
 #include <pcl/sample_consensus/method_types.h>
+#include <pcl/common/pca.h>
+#include <pcl/common/common.h>
+#include <pcl/kdtree/kdtree.h>
+#include <pcl/segmentation/extract_clusters.h>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations" // pcl::SAC_SAMPLE_SIZE is protected since PCL 1.8.0
@@ -57,7 +62,7 @@
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/filters/radius_outlier_removal.h>
 #include <pcl_conversions/pcl_conversions.h>
-
+#include <pcl/common/distances.h>
 
 #include <tf/transform_listener.h>
 #include <tf/message_filter.h>
@@ -71,6 +76,7 @@
 #include <rough_octomap/RoughOcTree.h>
 #include <rough_octomap/conversions.h>
 #include <omp.h>
+#include <unordered_set>
 
 #include "marble_mapping/OctomapArray.h"
 #include "marble_mapping/OctomapNeighbors.h"
@@ -98,6 +104,7 @@ public:
   virtual void octomapCallback(const octomap_msgs::OctomapConstPtr& msg);
   virtual void octomapDiffsCallback(const octomap_msgs::OctomapConstPtr& msg, const std::string owner);
   virtual void insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr& cloud);
+  virtual void insertStairCloudCallback(const sensor_msgs::PointCloud2::ConstPtr& cloud);
   virtual bool openFile(const std::string& filename);
 
 protected:
@@ -127,7 +134,19 @@ protected:
   void updateDiff(const ros::TimerEvent& event);
 
   // Merge all neighbor maps
+  void parseIDXandAgent(std::string& cidx_str);
+  void parseColorPairs(std::string& color_pairs_str);
+  char nidToIDX(std::string& nid);
   void mergeNeighbors();
+
+  struct PointHash {
+    size_t operator()(const octomap::point3d& point) const {
+      size_t xHash = std::hash<int>()(point.x());
+      size_t yHash = std::hash<int>()(point.y());
+      size_t zHash = std::hash<int>()(point.z());
+      return xHash ^ yHash ^ zHash;
+    }
+  };
 
   /// label the input cloud "pc" into ground and nonground. Should be in the robot's fixed frame (not world!)
   void filterGroundPlane(const PCLPointCloud& pc, PCLPointCloud& ground, PCLPointCloud& nonground) const;
@@ -212,8 +231,30 @@ protected:
   unsigned m_treeDepth;
   unsigned m_maxTreeDepth;
 
+  // traversability vars
+  ros::Publisher m_travMarkerPub;
   bool m_enableTraversability;
   bool m_enableTraversabilitySharing;
+  bool m_publishTravMarkerArray;
+  int m_travMarkerDensity;
+
+  // stair vars
+  ros::Publisher m_stairMarkerPub, m_stairPointsPub, m_stairEdgePub, m_nearStairIndicatorPub;
+  message_filters::Subscriber<sensor_msgs::PointCloud2>* m_stairPointCloudSub;
+  tf::MessageFilter<sensor_msgs::PointCloud2>* m_stairTfPointCloudSub;
+  ros::Timer stairs_timer;
+  std::unordered_set<octomap::point3d, PointHash> m_stairPoints;
+  bool m_enableStairs;
+  float m_stairProcessRate;
+  bool m_publishStairMarkerArray;
+  int m_stairMarkerDensity;
+  bool m_publishStairPointsArray;
+  bool m_publishStairEdgeArray;
+  bool m_publishNearStairIndicator;
+  bool m_isNearStairs;
+  float m_isNearStairInnerRad, m_isNearStairOuterRad;
+  void processStairsLoop(const ros::TimerEvent& event);
+  virtual void insertStairScan(const tf::StampedTransform& sensorToWorldTf, const PCLPointCloud& pc);
 
   // Diff parameters
   int diff_threshold;
@@ -223,6 +264,7 @@ protected:
   char next_idx;
   std::map<std::string, std::vector<int>> seqs;
   std::map<std::string, char> idx;
+  std::map<std::string, char> color_pairs;
 
   double m_pointcloudMinX;
   double m_pointcloudMaxX;

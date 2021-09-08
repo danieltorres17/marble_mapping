@@ -239,21 +239,25 @@ protected:
   int m_travMarkerDensity;
 
   // stair vars
-  ros::Publisher m_stairMarkerPub, m_stairPointsPub, m_stairEdgePub, m_nearStairIndicatorPub;
+  ros::Publisher m_stairMarkerPub, m_stairPointsPub, m_stairEdgePub, m_nearStairIndicatorPub, m_slowdownForStairsIndicatorPub;
   message_filters::Subscriber<sensor_msgs::PointCloud2>* m_stairPointCloudSub;
   tf::MessageFilter<sensor_msgs::PointCloud2>* m_stairTfPointCloudSub;
-  ros::Timer stairs_timer;
+  ros::Timer stairs_timer, is_near_stair_timer;
   std::unordered_set<octomap::point3d, PointHash> m_stairPoints;
   bool m_enableStairs;
-  float m_stairProcessRate;
+  float m_stairProcessRate, m_isNearStairPubRate;
   bool m_publishStairMarkerArray;
   int m_stairMarkerDensity;
   bool m_publishStairPointsArray;
   bool m_publishStairEdgeArray;
   bool m_publishNearStairIndicator;
-  bool m_isNearStairs;
-  float m_isNearStairInnerRad, m_isNearStairOuterRad;
+  bool m_isNearStairs, m_slowdownForStairs;
+  float m_isNearStairInnerRad, m_isNearStairOuterRad, m_slowdownForStairsRad, m_isNearStairZThresh;
+  pcl::PointCloud<pcl::PointXYZ> m_stairCloud;
   void processStairsLoop(const ros::TimerEvent& event);
+  void pubNearStairIndicatorLoop(const ros::TimerEvent& event);
+  void procAndPubNearStairIndicator();
+  void setStairCloud(pcl::PointCloud<pcl::PointXYZ>& stairCloud);
   virtual void insertStairScan(const tf::StampedTransform& sensorToWorldTf, const PCLPointCloud& pc);
 
   // Diff parameters

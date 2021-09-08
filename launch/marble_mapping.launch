@@ -30,13 +30,16 @@
   <arg name="publish_stair_points_array" default="true"/>
   <arg name="publish_stair_edge_array" default="true"/>
   <arg name="publish_near_stair_indicator" default="true"/>
+  <arg name="is_near_stair_pub_rate" default="2.0"/>
   <arg name="is_near_stair_inner_rad" default="1.0"/>
   <arg name="is_near_stair_outer_rad" default="1.5"/>
+  <arg name="slowdown_for_stairs_rad" default="3.0"/>
+  <arg name="is_near_stair_z_thresh" default="3.0"/>
   <arg name="stairs_prob_hit" default="0.99"/>
   <arg name="stairs_prob_miss" default="0.49"/>
   <arg name="stairs_prob_thres" default="0.5"/>
-  <arg name="stairs_thres_max" default="0.97"/>
-  <arg name="stairs_thres_min" default="0.12"/>
+  <arg name="stairs_prob_max" default="0.97"/>
+  <arg name="stairs_prob_min" default="0.12"/>
 
   <!-- Performance Tuning Options-->
   <!-- Whether to prune maps as they're created.  Expensive on big maps! -->
@@ -167,11 +170,13 @@
     <param name="publish_near_stair_indicator"  value="$(arg publish_near_stair_indicator)" />
     <param name="is_near_stair_inner_rad"       value="$(arg is_near_stair_inner_rad)" />
     <param name="is_near_stair_outer_rad"       value="$(arg is_near_stair_outer_rad)" />
+    <param name="slowdown_for_stairs_rad"       value="$(arg slowdown_for_stairs_rad)"/>
+    <param name="is_near_stair_z_thresh"        value="$(arg is_near_stair_z_thresh)"/>
     <param name="stairs_prob_hit"               value="$(arg stairs_prob_hit)" />
     <param name="stairs_prob_miss"              value="$(arg stairs_prob_miss)" />
     <param name="stairs_prob_thres"             value="$(arg stairs_prob_thres)" />
-    <param name="stairs_thres_max"              value="$(arg stairs_thres_max)" />
-    <param name="stairs_thres_min"              value="$(arg stairs_thres_min)" />
+    <param name="stairs_prob_max"               value="$(arg stairs_prob_max)" />
+    <param name="stairs_prob_min"               value="$(arg stairs_prob_min)" />
 
     <param name="filter_ground" value="$(arg filter_ground)" />
 

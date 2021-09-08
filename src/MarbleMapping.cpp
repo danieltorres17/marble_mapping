@@ -67,7 +67,7 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_initConfig(true)
 {
   double probHit, probMiss, thresMin, thresMax;
-  double stairsProbHit, stairsProbMiss, stairsThresMin, stairsThresMax, stairsProbThres;
+  double stairsProbHit, stairsProbMiss, stairsProbMin, stairsProbMax, stairsProbThres;
 
   m_nh_private.param("input", m_input, 1);
   m_nh_private.param("frame_id", m_worldFrameId, m_worldFrameId);
@@ -144,16 +144,20 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_nh_private.param("publish_stair_points_array", m_publishStairPointsArray, false);
   m_nh_private.param("publish_stair_edge_array", m_publishStairEdgeArray, false);
   m_nh_private.param("publish_near_stair_indicator", m_publishNearStairIndicator, false);
+  m_nh_private.param("is_near_stair_pub_rate", m_isNearStairPubRate, 2.0f);
   m_nh_private.param("is_near_stair_inner_rad", m_isNearStairInnerRad, 1.0f);
   m_nh_private.param("is_near_stair_outer_rad", m_isNearStairOuterRad, 1.5f);
+  m_nh_private.param("slow_down_for_rad", m_slowdownForStairsRad, 3.0f);
+  m_nh_private.param("is_near_stair_z_thresh", m_isNearStairZThresh, 3.0f);
   m_nh_private.param("stairs_prob_hit", stairsProbHit, 0.99);
   m_nh_private.param("stairs_prob_miss", stairsProbMiss, 0.49);
   m_nh_private.param("stairs_prob_thres", stairsProbThres, 0.5);
-  m_nh_private.param("stairs_thres_max", stairsThresMax, 0.97);
-  m_nh_private.param("stairs_thres_min", stairsThresMin, 0.12);
+  m_nh_private.param("stairs_prob_max", stairsProbMax, 0.97);
+  m_nh_private.param("stairs_prob_min", stairsProbMin, 0.12);
 
   if (m_enableStairs) {
     stairs_timer = m_nh.createTimer(ros::Duration(1.f/m_stairProcessRate), &MarbleMapping::processStairsLoop, this);
+    is_near_stair_timer = m_nh.createTimer(ros::Duration(1.f/m_isNearStairPubRate), &MarbleMapping::pubNearStairIndicatorLoop, this);
     m_publishStairMarkerArray = m_stairMarkerDensity > 0;
   } else {
     m_publishStairMarkerArray = false;
@@ -178,8 +182,8 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_octree->setStairsEnabled(m_enableStairs);
   m_octree->setStairsProbHit(stairsProbHit);
   m_octree->setStairsProbMiss(stairsProbMiss);
-  m_octree->setStairsClampingThresMin(stairsThresMin);
-  m_octree->setStairsClampingThresMax(stairsThresMax);
+  m_octree->setStairsClampingThresMin(stairsProbMin);
+  m_octree->setStairsClampingThresMax(stairsProbMax);
 
   #pragma omp parallel
   #pragma omp master
@@ -202,8 +206,8 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_merged_tree->setStairsEnabled(m_enableStairs);
   m_merged_tree->setStairsProbHit(stairsProbHit);
   m_merged_tree->setStairsProbMiss(stairsProbMiss);
-  m_merged_tree->setStairsClampingThresMin(stairsThresMin);
-  m_merged_tree->setStairsClampingThresMax(stairsThresMax);
+  m_merged_tree->setStairsClampingThresMin(stairsProbMin);
+  m_merged_tree->setStairsClampingThresMax(stairsProbMax);
   m_treeDepth = m_merged_tree->getTreeDepth();
   m_maxTreeDepth = m_treeDepth;
 
@@ -351,8 +355,10 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
     m_stairPointsPub = m_nh.advertise<visualization_msgs::MarkerArray>("stair_points_array", 1, m_latchedTopics);
   if (m_publishStairEdgeArray)
     m_stairEdgePub = m_nh.advertise<visualization_msgs::MarkerArray>("stair_edge_array", 1, m_latchedTopics);
-  if (m_publishNearStairIndicator)
+  if (m_publishNearStairIndicator) {
     m_nearStairIndicatorPub = m_nh.advertise<std_msgs::Bool>("is_near_stair", 1, m_latchedTopics);
+    m_slowdownForStairsIndicatorPub = m_nh.advertise<std_msgs::Bool>("slowdown_for_stairs", 1, m_latchedTopics);
+  }
 
   // Subscribers
   if (pclInput) {
@@ -943,7 +949,6 @@ void MarbleMapping::processStairsLoop(const ros::TimerEvent& event) {
 
   bool publishStairPointsArray = m_publishStairPointsArray && (m_stairPointsPub.getNumSubscribers() > 0);
   bool publishStairEdgeArray = m_publishStairEdgeArray && (m_stairEdgePub.getNumSubscribers() > 0);
-  bool publishNearStairIndicator = m_publishNearStairIndicator && (m_nearStairIndicatorPub.getNumSubscribers() > 0);
 
   pcl::PointCloud<pcl::PointXYZ> stairCloud;
   // Convert the point3d set into a point cloud
@@ -1147,48 +1152,79 @@ void MarbleMapping::processStairsLoop(const ros::TimerEvent& event) {
     m_stairEdgePub.publish(stairEdgeArray);
   }
 
-  // publish near stair indicator
+  setStairCloud(stairCloud);
+}
+
+void MarbleMapping::pubNearStairIndicatorLoop(const ros::TimerEvent& event) {
+  procAndPubNearStairIndicator();
+}
+
+void MarbleMapping::setStairCloud(pcl::PointCloud<pcl::PointXYZ>& stairCloud) {
+  m_stairCloud = stairCloud;
+}
+
+void MarbleMapping::procAndPubNearStairIndicator() {
+  bool publishNearStairIndicator = m_publishNearStairIndicator && ((m_nearStairIndicatorPub.getNumSubscribers() > 0) || (m_slowdownForStairsIndicatorPub.getNumSubscribers() > 0));
+  int stairCloudSize = m_stairCloud.width*m_stairCloud.height;
   if (publishNearStairIndicator) {
-    ROS_DEBUG("Publishing near stair indicator.");
-    // get current position
-    tf::StampedTransform baseToWorldTf;
-    try {
-      m_tfListener.waitForTransform(m_worldFrameId, m_baseFrameId, ros::Time::now(), ros::Duration(0.2));
-      m_tfListener.lookupTransform(m_worldFrameId, m_baseFrameId, ros::Time(0), baseToWorldTf);
-    } catch (tf::TransformException& ex) {
-      ROS_ERROR("near stair transform error %s", ex.what());
-      return;
-    }
-    pcl::PointXYZ pos(baseToWorldTf.getOrigin().getX(), baseToWorldTf.getOrigin().getY(), baseToWorldTf.getOrigin().getZ());
-
-    // get nearest stair position
-    pcl::PointXYZ nearest_stair_pos;
-    float nearest_stair_dist = INFINITY;
-    for (pcl::PointCloud<pcl::PointXYZ>::const_iterator it = stairCloud.begin(); it < stairCloud.end(); ++it) {
-      float stair_dist = sqrt(pow(it->x-pos.x,2)+pow(it->y-pos.y,2));
-      if (stair_dist < nearest_stair_dist) {
-        nearest_stair_pos = *it;
-        nearest_stair_dist = stair_dist;
+    if (stairCloudSize > 0) {
+      ROS_DEBUG("Publishing near stair indicator.");
+      // get current position
+      tf::StampedTransform baseToWorldTf;
+      try {
+        m_tfListener.waitForTransform(m_worldFrameId, m_baseFrameId, ros::Time::now(), ros::Duration(0.2));
+        m_tfListener.lookupTransform(m_worldFrameId, m_baseFrameId, ros::Time(0), baseToWorldTf);
+      } catch (tf::TransformException& ex) {
+        ROS_ERROR("near stair transform error %s", ex.what());
+        return;
       }
-    }
+      pcl::PointXYZ pos(baseToWorldTf.getOrigin().getX(), baseToWorldTf.getOrigin().getY(), baseToWorldTf.getOrigin().getZ());
 
-    // abort if no nearby stair points (shouldn't be necessary bc stairCloud should not be empty but just in case)
-    if (nearest_stair_pos.x == 0.f && nearest_stair_pos.y == 0.f && nearest_stair_pos.z == 0.f)
-      return;
+      // get nearest stair position
+      pcl::PointXYZ nearest_stair_pos;
+      float nearest_stair_dist = INFINITY;
+      for (pcl::PointCloud<pcl::PointXYZ>::const_iterator it = m_stairCloud.begin(); it < m_stairCloud.end(); ++it) {
+        float stair_dist = sqrt(pow(it->x-pos.x,2)+pow(it->y-pos.y,2));
+        if (stair_dist < nearest_stair_dist && abs(it->z-pos.z)<m_isNearStairZThresh) {
+          nearest_stair_pos = *it;
+          nearest_stair_dist = stair_dist;
+        }
+      }
 
-    // use nearest stair position to determine if near stairs (ie should trigger stair mode)
-    if (!m_isNearStairs && (pcl::euclideanDistance(nearest_stair_pos,pos) < m_isNearStairInnerRad)) {
-      // was not prev near stairs but am now
-      m_isNearStairs = true;
-    } else if (m_isNearStairs && (pcl::euclideanDistance(nearest_stair_pos,pos) > m_isNearStairOuterRad)) {
-      // was prev near stairs but no longer am
+      // abort if no nearby stair points (shouldn't be necessary bc stairCloud should not be empty but just in case)
+      if (nearest_stair_pos.x == 0.f && nearest_stair_pos.y == 0.f && nearest_stair_pos.z == 0.f)
+        return;
+
+      // use nearest stair position to determine if near stairs (ie should trigger stair mode)
+      if (!m_isNearStairs && (pcl::euclideanDistance(nearest_stair_pos,pos) < m_isNearStairInnerRad)) {
+        // was not prev near stairs but am now
+        m_isNearStairs = true;
+      } else if (m_isNearStairs && (pcl::euclideanDistance(nearest_stair_pos,pos) > m_isNearStairOuterRad)) {
+        // was prev near stairs but no longer am
+        m_isNearStairs = false;
+      }
+
+      m_slowdownForStairs = false;
+      if (pcl::euclideanDistance(nearest_stair_pos,pos) < m_slowdownForStairsRad)
+        m_slowdownForStairs = true;
+
+      // publish near stair indicator
+      std_msgs::Bool isNearStairMsg;
+      isNearStairMsg.data = m_isNearStairs;
+      m_nearStairIndicatorPub.publish(isNearStairMsg);
+      std_msgs::Bool slowdownForStairsMsg;
+      slowdownForStairsMsg.data = m_slowdownForStairs;
+      m_slowdownForStairsIndicatorPub.publish(slowdownForStairsMsg);
+    } else {
       m_isNearStairs = false;
+      std_msgs::Bool isNearStairMsg;
+      isNearStairMsg.data = m_isNearStairs;
+      m_nearStairIndicatorPub.publish(isNearStairMsg);
+      m_slowdownForStairs = false;
+      std_msgs::Bool slowdownForStairsMsg;
+      isNearStairMsg.data = m_slowdownForStairs;
+      m_slowdownForStairsIndicatorPub.publish(slowdownForStairsMsg);
     }
-
-    // publish near stair indicator
-    std_msgs::Bool isNearStairMsg;
-    isNearStairMsg.data = m_isNearStairs;
-    m_nearStairIndicatorPub.publish(isNearStairMsg);
   }
 }
 

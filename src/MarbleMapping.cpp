@@ -1510,7 +1510,7 @@ void MarbleMapping::mergeNeighbors() {
           }
 
           // If neighbor maps enabled, add the node if it's new (or needs remerge)
-          if (m_publishNeighborMaps) {
+          if (m_publishNeighborMaps && neighbor_maps.count(nid.data())) {
             neighbor_updated[nid.data()] = true;
             RoughOcTreeNode *newNode = neighbor_maps[nid.data()]->setNodeValue(nodeKey, it->getLogOdds());
             if (m_enableTraversabilitySharing) {
@@ -1560,7 +1560,7 @@ void MarbleMapping::publishOptionalMaps(const ros::TimerEvent& event) {
   visualization_msgs::MarkerArray freeNodesVis, occupiedNodesVis, travMarkers, stairMarkers;
 
   // init pointcloud:
-  pcl::PointCloud<PCLPoint> pclCloud;
+  pcl::PointCloud<PCLPointRGB> pclCloud;
 
   boost::mutex::scoped_lock lock(m_mtx);
   // Only traverse the tree if we're publishing a marker array or point cloud
@@ -1597,6 +1597,14 @@ void MarbleMapping::publishOptionalMaps(const ros::TimerEvent& event) {
             continue;
           } // else: current octree node is no speckle, send it out
 
+          // Color used for both markers and point cloud
+          RGBColor _color;
+          if (m_displayColor == 2 && m_merged_tree->getRoughEnabled()) {
+            _color = it->getRoughColor();
+          } else {
+            _color = it->getAgentColor(z, minZ, maxZ, m_adjustAgent);
+          }
+
           //create marker:
           if (publishMarkerArray) {
             unsigned idx = it.getDepth();
@@ -1608,13 +1616,7 @@ void MarbleMapping::publishOptionalMaps(const ros::TimerEvent& event) {
             cubeCenter.z = z;
 
             occupiedNodesVis.markers[idx].points.push_back(cubeCenter);
-
-            if (m_displayColor == 1) {
-              RGBColor _color = it->getAgentColor(cubeCenter.z, minZ, maxZ, m_adjustAgent);
-              std_msgs::ColorRGBA _color_msg; _color_msg.r = _color.r; _color_msg.g = _color.g; _color_msg.b = _color.b; _color_msg.a = 1.0f;
-              occupiedNodesVis.markers[idx].colors.push_back(_color_msg);
-            } else if (m_displayColor == 2 && m_merged_tree->getRoughEnabled()) {
-              RGBColor _color = it->getRoughColor();
+            if ((m_displayColor == 1) || (m_displayColor == 2)) {
               std_msgs::ColorRGBA _color_msg; _color_msg.r = _color.r; _color_msg.g = _color.g; _color_msg.b = _color.b; _color_msg.a = 1.0f;
               occupiedNodesVis.markers[idx].colors.push_back(_color_msg);
             } else {
@@ -1625,11 +1627,11 @@ void MarbleMapping::publishOptionalMaps(const ros::TimerEvent& event) {
 
           // insert into pointcloud:
           if (publishPointCloud) {
-            PCLPoint _point = PCLPoint();
+            PCLPointRGB _point = PCLPointRGB();
             _point.x = x; _point.y = y; _point.z = z;
-            if (m_merged_tree->getRoughEnabled()) {
-              _point.intensity = it->getRough();
-            }
+            _point.r = _color.r * 255;
+            _point.g = _color.g * 255;
+            _point.b = _color.b * 255;
             pclCloud.push_back(_point);
           }
 

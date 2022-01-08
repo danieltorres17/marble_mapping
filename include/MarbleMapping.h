@@ -1,6 +1,7 @@
 /*
  * Original work Copyright (c) 2010-2013, A. Hornung, University of Freiburg
  * Modified work Copyright 2020 Dan Riley
+ * Modified work Copyright 2021 Daniel Torres
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -45,6 +46,8 @@
 #include <pcl/conversions.h>
 #include <pcl_ros/transforms.h>
 #include <pcl/sample_consensus/method_types.h>
+#include <pcl/filters/statistical_outlier_removal.h>
+#include <pcl/filters/radius_outlier_removal.h>
 #include <pcl/common/pca.h>
 #include <pcl/common/common.h>
 #include <pcl/kdtree/kdtree.h>
@@ -60,7 +63,8 @@
 #include <pcl/filters/extract_indices.h>
 #include <pcl/filters/passthrough.h>
 #include <pcl/filters/voxel_grid.h>
-#include <pcl/filters/radius_outlier_removal.h>
+#include <pcl/registration/gicp.h>
+#include <pcl/registration/transforms.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/common/distances.h>
 
@@ -89,6 +93,8 @@ public:
   typedef pcl::PointXYZRGB PCLPointRGB;
   typedef pcl::PointCloud<PCLPoint> PCLPointCloud;
   typedef pcl::PointCloud<PCLPointRGB> PCLPointCloudRGB;
+  typedef pcl::PointXYZ icpPoint;
+  typedef pcl::PointCloud<icpPoint> icpPointCloud;
   typedef octomap::OcTree OcTreeT;
   typedef octomap::RoughOcTree RoughOcTreeT;
   typedef octomap_msgs::GetOctomap OctomapSrv;
@@ -139,6 +145,16 @@ protected:
   char nidToIDX(std::string& nid);
   void mergeNeighbors();
 
+  // ICP supporting functions
+  void tree2PointCloud(const RoughOcTreeT* tree, icpPointCloud& cloud);
+  void updateNeighborMaps();
+  void mergeNeighbors(const ros::TimerEvent& event);
+  Eigen::Matrix4f alignMap(const RoughOcTreeT* tree);
+  void mergeMap(const RoughOcTreeT* tree);
+  void transformMap(RoughOcTreeT* tree, const Eigen::Matrix4f& tf);
+  Eigen::Matrix4f getGICPTransform(icpPointCloud& source, icpPointCloud& target);
+  double getSign(double x) { if (x < 0) return -1; else return 1; }
+
   struct PointHash {
     size_t operator()(const octomap::point3d& point) const {
       size_t xHash = std::hash<int>()(point.x());
@@ -175,6 +191,7 @@ protected:
   ros::Timer diff_timer;
   ros::Timer pub_timer;
   ros::Timer pub_opt_timer;
+  ros::Timer map_merge_timer;
   tf::TransformListener m_tfListener;
   mutable boost::mutex m_mtx;
   boost::recursive_mutex m_config_mutex;
@@ -185,6 +202,7 @@ protected:
   OcTreeT* m_camera_tree;
   RoughOcTreeT* m_merged_tree;
   std::vector<octomap::KeyRay> keyrays;
+  RoughOcTreeT* temp_tree; // for neighbor diff concatenation
 
   marble_mapping::OctomapArray mapdiffs;
   marble_mapping::OctomapNeighbors neighbors;
@@ -316,6 +334,27 @@ protected:
   std::string m_diff_pre;
   std::string m_diff_post;
   std::map<std::string, ros::Subscriber> m_diffSubs;
+
+  // Map alignment parameters
+  std::string m_inputTopic;
+  std::string m_neighborsInputTopic;
+  int m_mapMergeTimer;
+  int m_leafScale;
+  bool m_neighborMapsMerged = false; // default init to false
+  std::map<std::string, bool> neighbor_aligned;
+  std::map<std::string, Eigen::Matrix4f> neighbor_tf;
+  // ICP parameters
+  int meanK;
+  double stdDevMulThresh;
+  int leafScale;
+  int icpIterations;
+  int icpOptimizerIterations;
+  int icpMaxCorrespDistScale;
+  double icpTFEpsScale;
+  int ransacNumIterations;
+  double ransacOutlierRejecThresh;
+  double euclideanFitnessEps;
+  double fitnessScoreThreshold;
 };
 }
 

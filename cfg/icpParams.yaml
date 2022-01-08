@@ -1,0 +1,17 @@
+# Parameters for Stat Outlier Filter
+meanK: 20
+stdDevMulThresh: 1.0
+
+# Parameters for Downsampling
+leafSizeScaling: 5 # this * map resolution, 2 works really well
+
+# Parameters for GICP
+icp_iterations: 10 # number of times to run GICP, 50
+optimizer_iterations: 100 # number of GICP optimizer internal iters, 20
+max_correspondence_dist_scale: 10 # this * map resolution
+transformation_eps_scale: 1e-6 # transformation epsilon
+ransacOutlierRejecThresh: 0.95 # this * map resolution
+ransac_number_iterations: 20 # number of iterations for RANSAC to run in GICP alignment
+eucFitnessEps: 1.0 # divergence control for alignment
+fitnessScoreThreshold: 3.0 # threshold to accept/reject merge
+tfValidationEuclideanMaxRange: 0.01 # TVE max range parameter

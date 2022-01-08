@@ -1,6 +1,7 @@
 /*
  * Original work Copyright (c) 2010-2013, A. Hornung, University of Freiburg
  * Modified work Copyright 2020 Dan Riley
+ * Modified work Copyright 2021 Daniel Torres
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -280,10 +281,15 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
   m_nh_private.param("remove_ceiling", m_removeCeiling, false);
   m_nh_private.param("remove_ceiling_depth", m_removeCeilingDepth, 4);
 
+  // Octomap in parameters
+  m_nh_private.param("input_topic", m_inputTopic, m_inputTopic);
+  m_nh_private.param("neighbors_input_topic", m_neighborsInputTopic, m_neighborsInputTopic);
+
   // Diff merging parameters
   m_nh_private.param("agents", m_agents, std::string("X1,X2"));
   m_nh_private.param("diff_pre", m_diff_pre, std::string("/robot_data/"));
   m_nh_private.param("diff_post", m_diff_post, std::string("/map_diff"));
+  m_nh_private.param("map_merge_timer", m_mapMergeTimer, 300);
 
   bool pclInput = false;
   bool octomapInput = false;
@@ -365,6 +371,7 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
     // Suppress insane PCL warnings
     pcl::console::setVerbosityLevel(pcl::console::L_ERROR);
     m_pointCloudSub = new message_filters::Subscriber<sensor_msgs::PointCloud2> (m_nh, "cloud_in", 5);
+    // m_pointCloudSub = new message_filters::Subscriber<sensor_msgs::PointCloud2> (m_nh, "lio_sam/mapping/cloud_registered", 5);
     m_tfPointCloudSub = new tf::MessageFilter<sensor_msgs::PointCloud2> (*m_pointCloudSub, m_tfListener, m_worldFrameId, 5);
     m_tfPointCloudSub->registerCallback(boost::bind(&MarbleMapping::insertCloudCallback, this, _1));
     m_stairPointCloudSub = new message_filters::Subscriber<sensor_msgs::PointCloud2> (m_nh, "stair_cloud_in", 5);
@@ -375,7 +382,7 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
     m_octomapFullService = m_nh.advertiseService("octomap_full", &MarbleMapping::octomapFullSrv, this);
     m_resetService = m_nh_private.advertiseService("reset", &MarbleMapping::resetSrv, this);
   } else if (octomapInput) {
-    m_octomapSub = m_nh.subscribe("cloud_in", 100, &MarbleMapping::octomapCallback, this);
+    m_octomapSub = m_nh.subscribe(m_inputTopic, 100, &MarbleMapping::octomapCallback, this);
   } else if (diffInput) {
     // Get the agents from the launch parameters
     std::vector<std::string> agents_vec;
@@ -398,7 +405,10 @@ MarbleMapping::MarbleMapping(const ros::NodeHandle private_nh_, const ros::NodeH
     neighbors.neighbors[0].octomaps.push_back(octomap_msgs::Octomap());
   }
 
-  m_neighborsSub = m_nh.subscribe("neighbor_maps", 100, &MarbleMapping::neighborMapsCallback, this);
+  m_neighborsSub = m_nh.subscribe(m_neighborsInputTopic, 100, &MarbleMapping::neighborMapsCallback, this);
+  // Diff map merge timer 
+  // map_merge_timer = m_nh.createTimer(ros::Duration(m_mapMergeTimer), &MarbleMapping::mergeNeighbors, this);
+
   // Timer for updating the local map diff that will be broadcast
   diff_timer = m_nh.createTimer(ros::Duration(diff_duration), &MarbleMapping::updateDiff, this);
 
@@ -498,7 +508,6 @@ bool MarbleMapping::openFile(const std::string& filename){
   m_res = m_octree->getResolution();
 
   return true;
-
 }
 
 void MarbleMapping::neighborMapsCallback(const marble_mapping::OctomapNeighborsConstPtr& msg) {
@@ -537,7 +546,7 @@ void MarbleMapping::neighborMapsCallback(const marble_mapping::OctomapNeighborsC
   // Better to put this somewhere else, but the callback should be infrequent enough this is ok
   try {
     if (m_mergeMaps)
-      mergeNeighbors();
+      updateNeighborMaps();
   } catch (const std::exception& e) {
     ROS_ERROR("merging error! %s", e.what());
   }
@@ -564,7 +573,7 @@ void MarbleMapping::octomapDiffsCallback(const octomap_msgs::OctomapConstPtr& ms
 
   // Merge the diff
   try {
-    mergeNeighbors();
+    updateNeighborMaps();
   } catch (const std::exception& e) {
     ROS_ERROR("merging error! %s", e.what());
   }
@@ -1395,7 +1404,7 @@ char MarbleMapping::nidToIDX(std::string& nid) {
   return nidx;
 }
 
-void MarbleMapping::mergeNeighbors() {
+void MarbleMapping::updateNeighborMaps() {
   // Merge neighbor maps with local map
   std::shared_ptr<RoughOcTreeT> ntree(nullptr);
   bool remerge;
@@ -1403,7 +1412,12 @@ void MarbleMapping::mergeNeighbors() {
 
   for (int i=0; i < neighbors.neighbors.size(); i++) {
     std::string nid = neighbors.neighbors[i].owner;
-
+    // ignore self maps - should be able to remove this?
+    if (nid == "H01") {
+      // ROS_INFO("Won't merge self maps");
+      continue;
+    }
+    ROS_INFO("Adding %s maps \n", nid.c_str());
     // If clear passed then re-merge everything
     if (neighbors.clear) {
       ROS_INFO("Clearing data for %s", nid.data());
@@ -1455,12 +1469,14 @@ void MarbleMapping::mergeNeighbors() {
       // Only merge if we haven't already merged this sequence, or we got an out-of-sequence diff
       if (!exists || remerge) {
         // Add to our list of sequences, and get a unique agent id for this neighbor
-        if (!exists) seqs[nid.data()].push_back(cur_seq);
+        if (!exists) 
+          seqs[nid.data()].push_back(cur_seq);
         if (idx[nid.data()])
           agent = idx[nid.data()];
         else {
           agent = nidToIDX(nid);
           idx[nid.data()] = agent;
+          next_idx++;
         }
 
         // Check if this is an out-of-sequence diff, and force remerge of later sequences we have
@@ -1470,9 +1486,11 @@ void MarbleMapping::mergeNeighbors() {
           // Backwards compatibility for regular OcTrees
           if (neighbors.neighbors[i].octomaps[j].id.find("RoughOcTree-") == std::string::npos)
             neighbors.neighbors[i].octomaps[j].id = "RoughOcTree-0";
-          ntree = std::shared_ptr<RoughOcTreeT>(dynamic_cast<RoughOcTreeT*>(octomap_msgs::binaryMsgToMap(neighbors.neighbors[i].octomaps[j])));
+          ntree = std::shared_ptr<RoughOcTreeT>(dynamic_cast<RoughOcTreeT*>
+                    (octomap_msgs::binaryMsgToMap(neighbors.neighbors[i].octomaps[j])));
         } else
-          ntree = std::shared_ptr<RoughOcTreeT>(dynamic_cast<RoughOcTreeT*>(octomap_msgs::fullMsgToMap(neighbors.neighbors[i].octomaps[j])));
+          ntree = std::shared_ptr<RoughOcTreeT>(dynamic_cast<RoughOcTreeT*>
+                    (octomap_msgs::fullMsgToMap(neighbors.neighbors[i].octomaps[j])));
 
         // Iterate through the diff tree and merge
         ntree->expand();
@@ -1523,6 +1541,370 @@ void MarbleMapping::mergeNeighbors() {
   }
   m_mtree_updated = true;
   m_mtree_markers_updated = true;
+}
+
+void MarbleMapping::mergeNeighbors(const ros::TimerEvent& event)
+{
+  // change neighbor maps aligned bool status
+  if (!m_neighborMapsMerged) {
+    ROS_INFO("Running merge procedure");
+    // add self map to merged map
+    m_octree->expand();
+    for (RoughOcTreeT::iterator it = m_octree->begin(), end=m_octree->end();
+         it != end; ++it) {
+      point3d pt = it.getCoordinate();
+      RoughOcTreeNode* newNode = m_merged_tree->setNodeValue(pt, it->getLogOdds());
+      newNode->setAgent(1);
+      if (m_enableTraversability)
+        newNode->setRough(it->getRough());
+    } 
+    // loop through stored neighbor maps, transform and merge
+    for (const auto& n : neighbor_maps) {
+      // store neighbor name
+      std::string nid = n.first.data();
+      // update neighbor updated status
+      neighbor_aligned[nid.data()] = true;
+      RoughOcTreeT* neighbor_map = neighbor_maps[nid.data()];
+
+      // align map
+      neighbor_map->prune();
+      Eigen::Matrix4f est_tf = alignMap(neighbor_map);
+      neighbor_tf[nid.data()] = est_tf; // store neighbor map tf
+      ROS_INFO("Aligning maps for %s", nid.c_str());
+
+      // transform map
+      transformMap(neighbor_map, est_tf);
+      ROS_INFO("Transforming maps for %s", nid.c_str());
+
+      // merge map
+      mergeMap(neighbor_map);
+      ROS_INFO("Merging maps for %s \n", nid.c_str());
+    }
+    m_neighborMapsMerged = true;
+  }
+  else {
+    ROS_INFO("Already aligned");
+  }
+}
+
+Eigen::Matrix4f MarbleMapping::alignMap(const RoughOcTreeT* tree)
+{
+  // convert tree to point cloud
+  icpPointCloud tree_pc; // pruned in 
+  tree2PointCloud(tree, tree_pc);
+
+  // convert merged map to point cloud
+  icpPointCloud merged_pc;
+  m_merged_tree->prune();
+  tree2PointCloud(m_merged_tree, merged_pc);
+
+  // get estimated transform from GICP
+  Eigen::Matrix4f est_tf = getGICPTransform(tree_pc, merged_pc);
+
+  return est_tf;
+}
+
+void MarbleMapping::mergeMap(const RoughOcTreeT* tree)
+{
+  // iterate through tree and merge
+  for (RoughOcTreeT::iterator it = tree->begin(), end = tree->end(); it != end; ++it) {
+    OcTreeKey nodeKey = it.getKey();
+    RoughOcTreeNode* nodeM = m_merged_tree->search(nodeKey);
+    RoughOcTreeNode* nodeCurr = tree->search(nodeKey);
+    char agent = nodeCurr->getAgent();
+    if (nodeM != NULL) {
+      // ignore any nodes that are self nodes
+      if (nodeM->getAgent() != 1) {
+        if (nodeM->getAgent() == agent) {
+          // if the diff is newer, and the merged map node came from this neighbor
+          // replace the value and maintain the agent id
+          m_merged_tree->setNodeValue(nodeKey, it->getLogOdds());
+          if (m_enableTraversabilitySharing)
+            nodeM->setRough(it->getRough());
+        }
+        else {
+          // if there's already a node in the merged map, but it's from another neighbor,
+          // or it's been previously merged, merge the value, and set agent to merged
+          m_merged_tree->updateNode(nodeKey, it->getLogOdds());
+          nodeM->setAgent(0);
+          if (m_enableTraversabilitySharing)
+            m_merged_tree->integrateNodeRough(nodeKey, it->getRough());
+        }
+      }
+    }
+    else {
+      // if the node doesn't exist in the merged map, add it with the value
+      RoughOcTreeNode* newNode = m_merged_tree->setNodeValue(nodeKey, it->getLogOdds());
+      newNode->setAgent(agent);
+      if (m_enableTraversabilitySharing)
+        newNode->setRough(it->getRough());
+    }
+  }
+}
+
+void MarbleMapping::tree2PointCloud(const RoughOcTreeT* tree, icpPointCloud& cloud)
+{
+  for (RoughOcTreeT::iterator it = tree->begin(), end = tree->end(); it != end; ++it) {
+    if (tree->isNodeOccupied(*it))
+      cloud.push_back(icpPoint(it.getX(), it.getY(), it.getZ()));
+  }
+}
+
+Eigen::Matrix4f MarbleMapping::getGICPTransform(icpPointCloud& source, icpPointCloud& target)
+{
+  // find min and max points of src point cloud
+  icpPoint srcMin, srcMax;
+  pcl::getMinMax3D(source, srcMin, srcMax);
+  icpPointCloud::Ptr src(new icpPointCloud);
+
+  // find min and max points of trg point cloud
+  icpPoint trgMin, trgMax;
+  pcl::getMinMax3D(target, trgMin, trgMax);
+  icpPointCloud::Ptr trg(new icpPointCloud);
+
+  // find all points in src that are within trg bounds
+  for (icpPointCloud::iterator it = source.begin(); it != source.end(); ++it) {
+    if ((trgMin.x < it->x && trgMin.y < it->y && trgMin.z < it->z) && 
+        (trgMax.x > it->x && trgMax.y > it->y && trgMax.z > it->z))
+          src->push_back(*it);
+  }
+
+  // find all points in trg that are within src bounds
+  for (icpPointCloud::iterator it = target.begin(); it != target.end(); ++it) {
+    if ((srcMin.x < it->x && srcMin.y < it->y && srcMin.z < it->z) && 
+        (srcMax.x > it->x && srcMax.y > it->y && srcMax.z > it->z))
+          trg->push_back(*it);
+  }
+
+  // Downsample
+  pcl::VoxelGrid<icpPoint> grid;
+  grid.setLeafSize(m_leafScale * m_res, m_leafScale * m_res, m_leafScale * m_res);
+  // downsample src cloud
+  grid.setInputCloud(src);
+  grid.filter(*src);
+  // downsample trg cloud
+  grid.setInputCloud(trg);
+  grid.filter(*trg);
+
+  // Statistical outlier filter to remove spurious points in PCs
+  pcl::StatisticalOutlierRemoval<icpPoint> sor;
+  sor.setMeanK(meanK);
+  sor.setStddevMulThresh(stdDevMulThresh);
+  sor.setInputCloud(src);
+  sor.filter(*src);
+  sor.setInputCloud(trg);
+  sor.filter(*trg);
+
+  // begin registration
+  pcl::GeneralizedIterativeClosestPoint<icpPoint, icpPoint> gicp;
+  gicp.setMaximumIterations(icpIterations);
+  gicp.setMaximumOptimizerIterations(icpOptimizerIterations);
+  gicp.setMaxCorrespondenceDistance(icpMaxCorrespDistScale * m_res);
+  gicp.setTransformationEpsilon(icpTFEpsScale);
+  gicp.setEuclideanFitnessEpsilon(euclideanFitnessEps);
+  gicp.setRANSACOutlierRejectionThreshold(ransacOutlierRejecThresh * m_res);
+  gicp.setRANSACIterations(ransacNumIterations);
+
+  // setup output tf and cloud  
+  Eigen::Matrix4f Ti = Eigen::Matrix4f::Identity();
+  Eigen::Matrix4f prev;
+  Eigen::Matrix4f trgToSrcTF;
+  icpPointCloud::Ptr gicp_result;
+
+  if (src->size() < trg->size()) 
+  {
+    gicp.setInputSource(src);
+    gicp.setInputTarget(trg);
+    gicp_result = src;
+    gicp.align(*gicp_result);
+    Ti = gicp.getFinalTransformation();
+  }
+  else
+  {
+    gicp.setInputSource(trg);
+    gicp.setInputTarget(src);
+    gicp_result = trg;
+    gicp.align(*gicp_result);
+    Ti = gicp.getFinalTransformation();
+    Ti = Ti.inverse();
+  }
+  // get the transformation from target to source
+  trgToSrcTF = Ti;
+  // get transformation fitness score
+  double fs = gicp.getFitnessScore(0.05);
+
+  ROS_INFO("GICP fitness score: %f", fs);
+  if (fs > fitnessScoreThreshold)
+    ROS_INFO("GICP Fitness Score above threshold. Storing map and will reattempt merge next time around.");
+  // check for GICP convergence 
+  if (gicp.hasConverged())
+    ROS_INFO("GICP converged");
+  else
+    ROS_INFO("GICP did not converge");
+
+  // clear filtered PCs
+  src->clear();
+  trg->clear();
+  
+  return trgToSrcTF;
+}
+
+void MarbleMapping::transformMap(RoughOcTreeT* tree, const Eigen::Matrix4f& tf)
+{
+  double res = m_res;
+  RoughOcTreeT* transformed = new RoughOcTreeT(res);
+
+  // build inverse transform
+  Eigen::Matrix3f rotation = tf.block<3,3> (0,0); // extract rotation
+  Eigen::Matrix3f invRotation = rotation.inverse();
+  Eigen::Matrix4f invTransform = tf.inverse();
+
+  // size in each coordinate of each axis
+  double minX, maxX, minY, maxY, minZ, maxZ;
+
+  // get the min and max in so we can step along each row
+  // boost::mutex::scoped_lock lock(m_mtx);
+  tree->getMetricMin(minX, minY, minZ);
+  tree->getMetricMax(maxX, maxY, maxZ);
+  // lock.unlock();
+
+  // allocate a vector of points
+  std::vector<octomap::point3d> points;
+
+  // make 8 points to make a map bounding box, performing the tf on them
+  // to get the range of values in the transformed map
+  points.push_back(point3d(minX, minY, minZ));
+  points.push_back(point3d(minX, minY, maxZ));
+  points.push_back(point3d(minX, maxY, minZ));
+  points.push_back(point3d(minX, maxY, maxZ));
+  points.push_back(point3d(maxX, minY, minZ));
+  points.push_back(point3d(maxX, minY, maxZ));
+  points.push_back(point3d(maxX, maxY, minZ));
+  points.push_back(point3d(maxX, maxY, maxZ));
+
+  // transform points that define bounding box
+  for (int i = 0; i < points.size(); i++) {
+    Eigen::Vector4f point(points[i].x(), points[i].y(), points[i].z(), 1.);
+    point = tf * point;
+    points[i] = point3d(point(0), point(1), point(2));
+  }
+  // find min and max for each axis
+  for (int i = 0; i < points.size(); i++) {
+    Eigen::Vector3f pt(points[i].x(), points[i].y(), points[i].z());
+    if (pt(0) < minX)
+      minX = pt(0);
+    if (pt(1) < minY)
+      minY = pt(1);
+    if (pt(2) < minZ)
+      minZ < pt(2);
+    if (pt(0) > maxX)
+      maxX = pt(0);
+    if (pt(1) > maxY)
+      maxY = pt(1);
+    if (pt(2) > maxZ)
+      maxZ = pt(2);
+  }
+  
+  // go through the possible destination voxels on a row by row basis
+  // and calculate occupancy from source voxels with inverse tf
+  // lock.lock();
+  for (double z = minZ - res / 2; z < (maxZ + res / 2); z += res) {
+    for (double y = minY - res / 2; y < (maxY + res / 2); y += res) {
+      for (double x = minX - res / 2; x < (maxX + res / 2); x += res) {
+        OcTreeKey destVoxel = transformed->coordToKey(point3d(x,y,z));
+
+        Eigen::Vector4f point(x,y,z,1);
+        point = invTransform * point;
+        point3d sourcePoint = point3d(point(0), point(1), point(2));
+        OcTreeKey sourceVoxel = tree->coordToKey(sourcePoint);
+        point3d nn = tree->keyToCoord(sourceVoxel);
+
+        // use nearest neighbour to set new occupancy in the transformed map
+        OcTreeNode *oldNode = tree->search(sourceVoxel);
+
+        // Occupancies to interpolate between
+        double c000, c001, c010, c011, c100, c101, c110,
+               c111, c00, c01, c10, c11, c0, c1;
+        double xd,yd,zd;
+
+        // differences in each direction between next closest voxel
+        xd = (sourcePoint.x() - nn.x()) / res;
+        yd = (sourcePoint.y() - nn.y()) / res;
+        zd = (sourcePoint.z() - nn.z()) / res;
+
+        if (oldNode != NULL) {
+          c000 = oldNode->getOccupancy();
+          OcTreeNode *node;
+
+          // c001
+          if ((node = tree->search(point3d(nn.x(), nn.y(), nn.z() +
+                      getSign(zd) * res))) != NULL) {
+            c001 = node->getOccupancy();
+          } else
+            c001 = 0;
+
+          // c010
+          if ((node = tree->search(point3d(nn.x(), nn.y() + 
+                      getSign(yd) * res, nn.z()))) != NULL) {
+            c010 =node->getOccupancy();
+          } else
+            c010 = 0;
+
+          // c011
+          if ((node = tree->search(point3d(nn.x(),nn.y() + 
+                      getSign(yd) * res, nn.z() + getSign(zd) * res))) != NULL) {
+            c011 = node->getOccupancy();
+          } else
+            c011 = 0;
+
+          // c100
+          if ((node = tree->search(point3d(nn.x() + getSign(xd) * res, nn.y(),
+                      nn.z()))) != NULL) {
+            c100 = node->getOccupancy();
+          } else
+            c100 = 0;
+
+          // c101
+          if ((node = tree->search(point3d(nn.x() + getSign(xd) * res, nn.y(),
+                      nn.z() + getSign(zd) * res))) != NULL) {
+            c101 = node->getOccupancy();
+          } else
+            c101 = 0;
+
+          // c110
+          if ((node = tree->search(point3d(nn.x() + getSign(xd) * res, nn.y() + 
+                      getSign(yd) * res, nn.z()))) != NULL) {
+            c110 = node->getOccupancy();
+          } else
+            c110 = 0;
+
+          // c111
+          if ((node = tree->search(point3d(nn.x() + getSign(xd) * res, nn.y() + 
+                      getSign(yd) * res, nn.z() + getSign(zd) * res))) != NULL) {
+            c111 = node->getOccupancy();
+          } else
+            c111 = 0;
+
+          // interpolate in x
+          c00 = (1-fabs(xd)) * c000 + fabs(xd) * c100;
+          c10 = (1-fabs(xd)) * c010 + fabs(xd) * c110;
+          c01 = (1-fabs(xd)) * c001 + fabs(xd) * c101;
+          c11 = (1-fabs(xd)) * c011 + fabs(xd) * c111;
+
+          // interpolate in y
+          c0 = (1-fabs(yd)) * c00 + fabs(yd) * c10;
+          c1 = (1-fabs(yd)) * c01 + fabs(yd) * c11;
+
+          // assign the new node value
+          OcTreeNode *newNode = transformed->updateNode(destVoxel, true);
+          newNode->setLogOdds(octomap::logodds((1 - fabs(zd)) * c0 + fabs(zd) * c1));
+        }
+      }
+    }
+  }
+  tree->swapContent(*transformed);
+  // lock.unlock();
+  delete transformed;
 }
 
 void MarbleMapping::publishOptionalMaps(const ros::TimerEvent& event) {

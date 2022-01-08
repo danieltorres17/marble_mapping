@@ -5,4 +5,4 @@ Octomap mapping with merging package for MARBLE DARPA Subterranean Challenge Tea
 
 https://github.com/OctoMap/octomap_mapping
 
-New edits enable aligned maps fixing misalignment errors seen previously. Still work in progress but really close.  
+New edits done by this fork fix misaligned neighbor map errors (by use of GICP) as seen previously. Still work in progress but really close.  
